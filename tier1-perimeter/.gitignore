@@ -3,3 +3,6 @@
 # Never commit rendered artefacts — they contain merged security policy
 # and may include device-specific secrets injected by deploy.sh
 rendered/
+# .hw-profile is the local mirror of /usr/local/etc/suru/hw-profile.conf
+# Written by 'make preflight' — operator-editable, never committed (device-specific)
+.hw-profile

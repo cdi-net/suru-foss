@@ -244,6 +244,26 @@ _platform_deploy() {
     trap '_opn_revert' ERR
   fi
 
+  # --- Dead-man's-switch for the (future) OPNsense inline flip -----------------
+  # Wired symmetric to pfSense (scripts/lib/safety-timer.sh): when the OPNsense
+  # Suricata inline deploy below is implemented and SURICATA_IPS_MODE=inline, this
+  # arms a router-side auto-revert so a self-lockout (inline flip dropping the NIC
+  # carrying ROUTER_HOST) heals itself. INERT TODAY: the OPNsense Suricata deploy
+  # is a [STUB] (no inline flip happens), and the revert payload
+  # (opnsense/suricata-safety-revert.sh) is unverified on a live OPNsense — so the
+  # arm is gated off until both land. The library + scheduling (daemon(8)) are
+  # FreeBSD-native and already work on OPNsense; only the revert payload needs
+  # live validation. Opt out with SURU_SAFETY_TIMER=false.
+  if [[ "${SURICATA_IPS_MODE:-legacy}" == "inline" \
+        && "${SURU_SAFETY_TIMER:-true}" == "true" \
+        && "${dry_run}" != "true" ]]; then
+    echo "[opnsense] NOTE: SURICATA_IPS_MODE=inline requested, but the OPNsense Suricata"
+    echo "[opnsense]       inline deploy + safety-revert payload are [STUB] pending live"
+    echo "[opnsense]       OPNsense validation — NOT arming the dead-man's-switch. Once the"
+    echo "[opnsense]       OPNsense inline deploy lands, wire safety_timer_arm here (mirror"
+    echo "[opnsense]       of pfsense.sh) with _OPN_APPLIER_SURICATA_SAFETY_REVERT."
+  fi
+
   # Suricata: previous SCP of /usr/local/etc/suricata/suricata.yaml is a
   # no-op. OPNsense's os-ids plugin regenerates that file from /conf/config.xml
   # (OPNsense/IDS) on every `configctl ids reload`. Direct SCP is overwritten
@@ -281,6 +301,22 @@ _platform_deploy() {
   rm -f "${tmp_syslogng}"
 
   _opn_remote_exec "configctl syslog restart"
+
+  # --- Hardware tuning (OPNsense) -----------------------------------------------
+  # [STUB: OPNsense hardware-adaptive tuning is not yet implemented.
+  #  pf table entries: OPNsense exposes system.maximumtableentries via
+  #    POST /api/core/tunables/setItem or editing /conf/config.xml.
+  #    hw-profile.conf SURU_HW_PF_TABLE_ENTRIES value would apply here.
+  #  Zeek lb_procs: same node.cfg path as pfSense; zeek-iface-apply.php
+  #    should be portable with a sudo-as-root call — pending live OPNsense test.
+  #  Suricata detect profile: OPNsense IDS uses /api/ids/settings/set endpoint;
+  #    key name for detect_eng_profile is unverified — pending live validation.
+  #  Load hw-profile once confirmed OPNsense applier paths exist:
+  #    local _hw_profile="${TIER1_DIR:-$(cd "${SCRIPT_DIR}/../.." && pwd)}/.hw-profile"
+  #    [[ -f "${_hw_profile}" ]] && source "${_hw_profile}"
+  # ]
+  echo "[opnsense] HW tuning: STUB — OPNsense-specific applier paths not yet verified."
+
   _opn_remote_exec "configctl ids restart" || _opn_remote_exec "service suricata onerestart"
   _opn_remote_exec "zeekctl deploy"
 

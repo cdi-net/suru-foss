@@ -40,6 +40,8 @@ source "${SCRIPT_DIR}/lib/ssh.sh"
 source "${SCRIPT_DIR}/lib/certs.sh"
 # shellcheck source=lib/api.sh
 source "${SCRIPT_DIR}/lib/api.sh"
+# shellcheck source=lib/safety-timer.sh
+source "${SCRIPT_DIR}/lib/safety-timer.sh"
 
 for cmd in ssh scp envsubst; do
   command -v "${cmd}" > /dev/null 2>&1 || { echo "[deploy:ERROR] Missing required command: ${cmd}" >&2; exit 1; }

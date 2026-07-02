@@ -48,28 +48,35 @@ endif
 VERBOSE ?= false
 
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
-T2_RENDER := $(REPO_ROOT)/tier2-telemetry/build/render.sh
-DEPLOY    := $(REPO_ROOT)/tier1-perimeter/scripts/deploy.sh
-TESTS     := $(REPO_ROOT)/tier2-telemetry/build/tests/test-render.sh
+T2_RENDER  := $(REPO_ROOT)/tier2-telemetry/build/render.sh
+DEPLOY     := $(REPO_ROOT)/tier1-perimeter/scripts/deploy.sh
+TESTS      := $(REPO_ROOT)/tier2-telemetry/build/tests/test-render.sh
+HW_PREFLIGHT := $(REPO_ROOT)/tier1-perimeter/scripts/hw-preflight.sh
 
 API_LIB   := $(REPO_ROOT)/tier1-perimeter/scripts/lib/api.sh
 
 SNG_METRICS := $(REPO_ROOT)/tier1-perimeter/scripts/syslog-ng-metrics.sh
 VERIFY_PFB  := $(REPO_ROOT)/tier1-perimeter/scripts/verify-pfblockerng-feeds.sh
 
-.PHONY: render deploy deploy-full clean test \
+.PHONY: render deploy deploy-full preflight clean test \
         api-health api-validate api-install-pfrest api-reload-rules api-bootstrap \
         sng-metrics sng-status sng-buffer sng-lag verify-pfblockerng
+
+# preflight: detect router hardware and write tier1-perimeter/.hw-profile
+# Best-effort — never fails the pipeline; render reads .hw-profile if present.
+preflight:
+	@echo "[suru] Running hardware preflight for platform: $(PLATFORM)"
+	@bash $(HW_PREFLIGHT) --platform $(PLATFORM) $(if $(filter true,$(VERBOSE)),--verbose,) || true
 
 render:
 	@echo "[suru] Rendering T2 intelligence into T1 templates for platform: $(PLATFORM)"
 	@bash $(T2_RENDER) --platform $(PLATFORM) $(if $(filter true,$(RENDER_DRY_RUN)),--dry-run,) $(if $(filter true,$(VERBOSE)),--verbose,)
 
-deploy: render
+deploy: preflight render
 	@echo "[suru] Deploying rendered artefacts to $(PLATFORM) device..."
 	@bash $(DEPLOY) --platform $(PLATFORM) $(if $(filter true,$(DRY_RUN)),--dry-run,) $(if $(filter true,$(VERBOSE)),--verbose,)
 
-deploy-full: render deploy
+deploy-full: deploy
 	@echo "[suru] Deploy-full complete for $(PLATFORM)."
 
 clean:
