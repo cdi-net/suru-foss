@@ -60,8 +60,14 @@ _PF_APPLIER_SYSLOGNG="$(cd "${SCRIPT_DIR}/../../pfsense" && pwd)/syslog-ng-apply
 _PF_APPLIER_ZEEK="$(cd "${SCRIPT_DIR}/../../pfsense" && pwd)/zeek-scripts-apply.php"
 _PF_APPLIER_ZEEK_IFACE="$(cd "${SCRIPT_DIR}/../../pfsense" && pwd)/zeek-iface-apply.php"
 _PF_APPLIER_SURICATA="$(cd "${SCRIPT_DIR}/../../pfsense" && pwd)/suricata-rules-apply.php"
+_PF_LIB_IFACE_RESOLVE="$(cd "${SCRIPT_DIR}/../../pfsense" && pwd)/suru-iface-resolve.php"
 _PF_APPLIER_BACKUP="$(cd "${SCRIPT_DIR}/../../pfsense" && pwd)/backup-encrypt.php"
 _PF_APPLIER_RESTORE="$(cd "${SCRIPT_DIR}/../../pfsense" && pwd)/backup-restore.php"
+_PF_APPLIER_SURICATA_TUNING="$(cd "${SCRIPT_DIR}/../../pfsense" && pwd)/suricata-tuning-apply.php"
+_PF_APPLIER_SURICATA_DROP="$(cd "${SCRIPT_DIR}/../../pfsense" && pwd)/suricata-drop-policy-apply.php"
+_PF_APPLIER_SURICATA_SAFETY_REVERT="$(cd "${SCRIPT_DIR}/../../pfsense" && pwd)/suricata-safety-revert.php"
+_PF_APPLIER_PF_TUNING="$(cd "${SCRIPT_DIR}/../../pfsense" && pwd)/pf-tuning-apply.php"
+_PF_APPLIER_DNS_TUNING="$(cd "${SCRIPT_DIR}/../../pfsense" && pwd)/dns-tuning-apply.php"
 
 # Remote location for encrypted backups (router-side). Persists across deploys
 # so the operator has on-router history even when a local pull fails.
@@ -105,6 +111,49 @@ _platform_deploy() {
   esac
 
   local -a ssh_opts=(-i "${ssh_key}" -o "StrictHostKeyChecking=${_strict}" -o "BatchMode=yes" -o "ConnectTimeout=15")
+
+  # --- Hardware profile — load operator-reconciled values from hw-profile.conf ---
+  # Written by 'make preflight' (tier1-perimeter/.hw-profile). Safe defaults when
+  # absent so deploy does not break on first-run before preflight has been run.
+  # Defaults match the 4 GB RAM / 4-core profile to stay conservative.
+  local _hw_pf_table_entries="800000"
+  local _hw_pf_max_states="400000"
+  local _hw_zeek_lb_procs="2"
+  local _hw_suricata_profile="medium"
+  local _hw_suricata_stream_memcap="64mb"
+  local _hw_suricata_reassembly_memcap="128mb"
+  local _hw_suricata_defrag_memcap="32mb"
+  local _hw_syslogng_disk_buf_bytes="4294967296"   # 4 GB default
+  local _hw_unbound_msg_cache_mb="50"
+  local _hw_unbound_rrset_cache_mb="100"
+  local _hw_profile="${TIER1_DIR:-$(cd "${SCRIPT_DIR}/../.." && pwd)}/.hw-profile"
+  if [[ -f "${_hw_profile}" ]]; then
+    # Read individual keys with grep|cut — never source a router-derived file as shell.
+    _hw_pf_table_entries="$(grep -m1        '^SURU_HW_PF_TABLE_ENTRIES='              "${_hw_profile}" | cut -d= -f2)"
+    _hw_pf_max_states="$(grep -m1           '^SURU_HW_PF_MAX_STATES='                 "${_hw_profile}" | cut -d= -f2)"
+    _hw_zeek_lb_procs="$(grep -m1           '^SURU_HW_ZEEK_LB_PROCS='                 "${_hw_profile}" | cut -d= -f2)"
+    _hw_suricata_profile="$(grep -m1        '^SURU_HW_SURICATA_PROFILE='              "${_hw_profile}" | cut -d= -f2)"
+    _hw_suricata_stream_memcap="$(grep -m1  '^SURU_HW_SURICATA_STREAM_MEMCAP='        "${_hw_profile}" | cut -d= -f2)"
+    _hw_suricata_reassembly_memcap="$(grep -m1 '^SURU_HW_SURICATA_REASSEMBLY_MEMCAP=' "${_hw_profile}" | cut -d= -f2)"
+    _hw_suricata_defrag_memcap="$(grep -m1  '^SURU_HW_SURICATA_DEFRAG_MEMCAP='        "${_hw_profile}" | cut -d= -f2)"
+    _hw_syslogng_disk_buf_bytes="$(grep -m1 '^SURU_HW_SYSLOGNG_DISK_BUFFER_BYTES='   "${_hw_profile}" | cut -d= -f2)"
+    _hw_unbound_msg_cache_mb="$(grep -m1    '^SURU_HW_UNBOUND_MSG_CACHE_MB='          "${_hw_profile}" | cut -d= -f2)"
+    _hw_unbound_rrset_cache_mb="$(grep -m1  '^SURU_HW_UNBOUND_RRSET_CACHE_MB='        "${_hw_profile}" | cut -d= -f2)"
+    _hw_pf_table_entries="${_hw_pf_table_entries:-800000}"
+    _hw_pf_max_states="${_hw_pf_max_states:-400000}"
+    _hw_zeek_lb_procs="${_hw_zeek_lb_procs:-2}"
+    _hw_suricata_profile="${_hw_suricata_profile:-medium}"
+    _hw_suricata_stream_memcap="${_hw_suricata_stream_memcap:-64mb}"
+    _hw_suricata_reassembly_memcap="${_hw_suricata_reassembly_memcap:-128mb}"
+    _hw_suricata_defrag_memcap="${_hw_suricata_defrag_memcap:-32mb}"
+    _hw_syslogng_disk_buf_bytes="${_hw_syslogng_disk_buf_bytes:-4294967296}"
+    _hw_unbound_msg_cache_mb="${_hw_unbound_msg_cache_mb:-50}"
+    _hw_unbound_rrset_cache_mb="${_hw_unbound_rrset_cache_mb:-100}"
+    echo "[pfsense] hw-profile: pf_table_entries=${_hw_pf_table_entries} pf_max_states=${_hw_pf_max_states} zeek_lb_procs=${_hw_zeek_lb_procs} suricata=${_hw_suricata_profile} stream=${_hw_suricata_stream_memcap} reassembly=${_hw_suricata_reassembly_memcap} defrag=${_hw_suricata_defrag_memcap} sng_buf_bytes=${_hw_syslogng_disk_buf_bytes} unbound_msg=${_hw_unbound_msg_cache_mb}MB rrset=${_hw_unbound_rrset_cache_mb}MB"
+  else
+    echo "[pfsense] hw-profile not found (${_hw_profile}) — using defaults: pf_table_entries=${_hw_pf_table_entries} pf_max_states=${_hw_pf_max_states} zeek_lb_procs=${_hw_zeek_lb_procs} suricata_profile=${_hw_suricata_profile}"
+    echo "[pfsense]   Run 'make preflight' to detect hardware and write hw-profile."
+  fi
 
   # --- Internal helpers -------------------------------------------------------
 
@@ -322,6 +371,16 @@ _platform_deploy() {
 
     # shellcheck disable=SC2029
     ssh "${ssh_opts[@]}" "${ssh_user}@${target}" "rm -f '${pass_stage}'" 2>/dev/null || true
+
+    # This SSH-based revert just succeeded, which PROVES the management path is
+    # intact — so the router-side dead-man's-switch is no longer needed and would
+    # otherwise fire a redundant (and confusing) second revert ~10 min later.
+    # Cancel it. (If SSH were actually cut, we'd never reach here and the timer
+    # would correctly fire instead.)
+    if [[ "${_pf_safety_armed:-false}" == "true" ]]; then
+      safety_timer_disarm_quiet
+      echo "[pfsense] Dead-man's-switch disarmed after successful revert."
+    fi
     echo "[pfsense] === Revert complete ==="
   }
 
@@ -624,6 +683,7 @@ EOPHP
     -e "s|@@SENSOR_NAME@@|${_sng_sensor}|g" \
     -e "s|@@WAN_IFACE@@|${_sng_wan}|g" \
     -e "s|@@LAN_IFACE@@|${_sng_lan}|g" \
+    -e "s|@@SYSLOGNG_DISK_BUFFER_BYTES@@|${_hw_syslogng_disk_buf_bytes}|g" \
     < "${_PF_SYSLOGNG_TPL}" > "${tmp_syslogng}"
   local pf_syslogng_src="${_PF_REMOTE_STAGING}/syslog-ng.conf-source"
   local pf_syslogng_applier="${_PF_REMOTE_STAGING}/syslog-ng-apply.php"
@@ -633,6 +693,58 @@ EOPHP
   local _SNGSUDO=""
   [[ "${ssh_user}" != "root" ]] && _SNGSUDO="sudo "
   _pf_remote_exec "${_SNGSUDO}php ${pf_syslogng_applier} ${pf_syslogng_src}"
+
+  # SURICATA_IPS_MODE: legacy (default; pcap + reactive pf-table block) or
+  # inline (netmap in-flight drop on the physical NIC). Resolved here
+  # (before the safety-timer arm, which depends on it).
+  local _suri_ips_mode="${SURICATA_IPS_MODE:-legacy}"
+  if [[ "${_suri_ips_mode}" != "legacy" && "${_suri_ips_mode}" != "inline" ]]; then
+    log_die "SURICATA_IPS_MODE must be 'legacy' or 'inline', got: '${_suri_ips_mode}'"
+  fi
+
+  # sudo prefix for on-router privileged calls — declared here (before the
+  # safety-timer arm block, which references it). Under `set -u` a `local`
+  # declared later would be an unbound-variable abort when read here.
+  local _SURISUDO=""
+  [[ "${ssh_user}" != "root" ]] && _SURISUDO="sudo "
+
+  # --- Arm the dead-man's-switch before the self-lockout-risky inline flip -----
+  # An inline netmap flip can drop the host stack on the NIC carrying ROUTER_HOST
+  # (e.g. igb1.10 on the igb1 trunk) — the deploy's own SSH path. The ERR-trap
+  # _pf_revert also runs over SSH and cannot recover that. So before touching
+  # Suricata, arm a router-side timer (scripts/lib/safety-timer.sh) that reverts
+  # to legacy autonomously if this deploy never reaches its disarm call. Only for
+  # inline (legacy carries no lockout risk); opt out with SURU_SAFETY_TIMER=false.
+  local _pf_safety_armed="false"
+  if [[ "${_suri_ips_mode}" == "inline" \
+        && "${SURU_SAFETY_TIMER:-true}" == "true" \
+        && "${dry_run}" != "true" ]]; then
+    # Consumed by safety_timer_arm/disarm in the sourced scripts/lib/safety-timer.sh
+    # (cross-file read — shellcheck can't see it).
+    # shellcheck disable=SC2034
+    SAFETY_TARGET="${target}"
+    # shellcheck disable=SC2034
+    SAFETY_USER="${ssh_user}"
+    # shellcheck disable=SC2034
+    SAFETY_SUDO="${_SURISUDO}"
+    # shellcheck disable=SC2034
+    SAFETY_DRYRUN="${dry_run}"
+    # shellcheck disable=SC2034
+    SAFETY_SSH_OPTS=("${ssh_opts[@]}")
+    local _pf_safety_secs="${SURU_SAFETY_REVERT_SECONDS:-600}"
+    # Derive the remote revert path from the library (single source of truth for
+    # the remote layout — no hardcoded /tmp/suru-safety string to drift).
+    local _pf_safety_remote; _pf_safety_remote="$(safety_timer_remote_path "${_PF_APPLIER_SURICATA_SAFETY_REVERT}")"
+    if safety_timer_arm "${_pf_safety_secs}" "${_PF_APPLIER_SURICATA_SAFETY_REVERT}" \
+         "${_SURISUDO}php ${_pf_safety_remote}"; then
+      _pf_safety_armed="true"
+    else
+      echo "[pfsense] ERROR: could not arm the inline-flip safety timer — refusing to flip inline blind." >&2
+      return 1
+    fi
+  elif [[ "${_suri_ips_mode}" == "inline" && "${dry_run}" == "true" ]]; then
+    echo "[pfsense] (dry-run) would arm inline-flip dead-man's-switch (revert in ${SURU_SAFETY_REVERT_SECONDS:-600}s if not disarmed)"
+  fi
 
   # --- Deploy Suricata via XML model (GUI-aware) -----------------------------
   # The pfSense Suricata package does NOT consume any top-level
@@ -653,21 +765,123 @@ EOPHP
   _pf_stage_and_install "${rendered}/${_PF_RENDERED_SURICATA_ENABLE}"  "${pf_suri_enable}"
   _pf_stage_and_install "${rendered}/${_PF_RENDERED_SURICATA_DISABLE}" "${pf_suri_disable}"
   _pf_stage_and_install "${_PF_APPLIER_SURICATA}"                       "${pf_suri_applier}"
-  local _SURISUDO=""
-  [[ "${ssh_user}" != "root" ]] && _SURISUDO="sudo "
+  # _SURISUDO already declared+set above (hoisted before the safety-timer arm).
   local _suri_restart_flag=""
   [[ "${SURU_SURICATA_RESTART:-true}" == "true" ]] && _suri_restart_flag=" --restart"
-  # --ifaces: pass the interface list so the applier can register any missing
-  # pfSense XML entries before applying rule selection. Resolved from
-  # SURICATA_IFACES (multi) with fallback to SURICATA_IFACE (legacy single).
+  # --ifaces: PHYSICAL NIC names only (e.g. igb1,igb2) — the physical-NIC-only
+  # interface contract.
+  # The applier resolves each NIC to its pfSense carrier alias on-router via
+  # suru-iface-resolve.php (staged below). Resolved from SURICATA_IFACES
+  # (multi) with fallback to SURICATA_IFACE (legacy single).
   local _suri_ifaces="${SURICATA_IFACES:-${SURICATA_IFACE:-}}"
   # SEC-022: validate interface list before embedding in remote shell command.
   if [[ -n "${_suri_ifaces}" ]] && ! [[ "${_suri_ifaces}" =~ ^[A-Za-z0-9,._-]+$ ]]; then
     log_die "SURICATA_IFACES contains invalid characters: '${_suri_ifaces}' (allowed: A-Za-z0-9,._-)"
   fi
+  # Fast client-side rejection of the old alias contract (authoritative check
+  # runs on-router in suru-iface-resolve.php with config.xml access).
+  local _suri_entry
+  for _suri_entry in ${_suri_ifaces//,/ }; do
+    if [[ "${_suri_entry}" == *.* ]]; then
+      log_die "SURICATA_IFACES entry '${_suri_entry}' is a VLAN sub-interface — list the physical parent NIC (e.g. '${_suri_entry%%.*}')"
+    fi
+    if [[ "${_suri_entry}" =~ ^(lan|wan|opt[0-9]+)$ ]]; then
+      log_die "SURICATA_IFACES entry '${_suri_entry}' is a pfSense logical alias — the contract is physical NICs only (e.g. igb1,igb2). See .env.example."
+    fi
+  done
+  # SURICATA_IPS_MODE resolved+validated above (before the safety-timer arm).
+  local _suri_netmap_threads_flag=""
+  if [[ -n "${SURICATA_NETMAP_THREADS:-}" ]]; then
+    if ! [[ "${SURICATA_NETMAP_THREADS}" =~ ^[1-8]$ ]]; then
+      log_die "SURICATA_NETMAP_THREADS must be 1-8, got: '${SURICATA_NETMAP_THREADS}'"
+    fi
+    _suri_netmap_threads_flag=" --netmap-threads=${SURICATA_NETMAP_THREADS}"
+  fi
   local _suri_ifaces_flag=""
   [[ -n "${_suri_ifaces}" ]] && _suri_ifaces_flag=" --ifaces=${_suri_ifaces}"
-  _pf_remote_exec "${_SURISUDO}php ${pf_suri_applier} ${pf_suri_enable} ${pf_suri_disable}${_suri_ifaces_flag}${_suri_restart_flag}"
+  # Stage the shared physical->carrier resolver next to both Suricata appliers
+  # (only needed when an interface list is passed — the appliers require_once
+  # it solely on that path).
+  if [[ -n "${_suri_ifaces}" ]]; then
+    local pf_iface_resolve="${_PF_REMOTE_STAGING}/suru-iface-resolve.php"
+    _pf_stage_and_install "${_PF_LIB_IFACE_RESOLVE}" "${pf_iface_resolve}"
+  fi
+  _pf_remote_exec "${_SURISUDO}php ${pf_suri_applier} ${pf_suri_enable} ${pf_suri_disable}${_suri_ifaces_flag} --ips-mode=${_suri_ips_mode}${_suri_netmap_threads_flag}${_suri_restart_flag}"
+
+  # --- Suricata engine tuning (detect profile) — hardware-adaptive ------------
+  # Sets detect_eng_profile on every Suricata interface to the hw-profile value.
+  # Skipped when SURU_SURICATA_TUNING=false (operator opt-out).
+  if [[ "${SURU_SURICATA_TUNING:-true}" == "true" ]]; then
+    local pf_suri_tuning="${_PF_REMOTE_STAGING}/suricata-tuning-apply.php"
+    _pf_stage_and_install "${_PF_APPLIER_SURICATA_TUNING}" "${pf_suri_tuning}"
+    _pf_remote_exec "${_SURISUDO}php ${pf_suri_tuning} --profile=${_hw_suricata_profile} --stream-memcap=${_hw_suricata_stream_memcap} --reassembly-memcap=${_hw_suricata_reassembly_memcap} --defrag-memcap=${_hw_suricata_defrag_memcap}${_suri_ifaces_flag}"
+    echo "[pfsense] Suricata tuning applied: profile=${_hw_suricata_profile} stream=${_hw_suricata_stream_memcap} reassembly=${_hw_suricata_reassembly_memcap} defrag=${_hw_suricata_defrag_memcap}"
+  else
+    echo "[pfsense] Skipping Suricata engine tuning (SURU_SURICATA_TUNING=false)"
+  fi
+
+  # --- Suricata inline-drop policy (alert->drop for CRITICAL categories) --------
+  # Hard precondition for SURICATA_IPS_MODE=inline: inline netmap enforces only
+  # via drop-action rules (the legacy pf-table block plugin is off in inline
+  # mode). Converts SURICATA_DROP_CATEGORIES to drop via the package SID-Mgmt
+  # subsystem. Inert under legacy mode (pf-table block is action-agnostic),
+  # enforcing under inline. Gated by SURU_SURICATA_DROP_POLICY (default true).
+  # An empty SURICATA_DROP_CATEGORIES reverts the policy (clears the drop list).
+  if [[ "${SURU_SURICATA_DROP_POLICY:-true}" == "true" ]]; then
+    # Distinguish UNSET (use CRITICAL default) from EXPLICITLY-EMPTY (operator
+    # asked to revert the policy). `${VAR:-default}` would collapse both to the
+    # default and make the documented `SURICATA_DROP_CATEGORIES=` revert path
+    # unreachable — use the `+x` set-check instead.
+    local _suri_drop_cats
+    if [[ -z "${SURICATA_DROP_CATEGORIES+x}" ]]; then
+      _suri_drop_cats="emerging-botcc,emerging-malware,emerging-exploit,emerging-attack_response"
+    else
+      _suri_drop_cats="${SURICATA_DROP_CATEGORIES}"
+    fi
+    if [[ -n "${_suri_drop_cats}" ]] && ! [[ "${_suri_drop_cats}" =~ ^[A-Za-z0-9,._-]+$ ]]; then
+      log_die "SURICATA_DROP_CATEGORIES contains invalid characters: '${_suri_drop_cats}' (allowed: A-Za-z0-9,._-)"
+    fi
+    local pf_suri_drop="${_PF_REMOTE_STAGING}/suricata-drop-policy-apply.php"
+    _pf_stage_and_install "${_PF_APPLIER_SURICATA_DROP}" "${pf_suri_drop}"
+    # Resolver already staged above with the rules applier (only when ifaces set).
+    # An empty --drop-categories reaches the applier and triggers its revert path.
+    _pf_remote_exec "${_SURISUDO}php ${pf_suri_drop}${_suri_ifaces_flag} --drop-categories=${_suri_drop_cats}${_suri_restart_flag}"
+    if [[ -n "${_suri_drop_cats}" ]]; then
+      echo "[pfsense] Suricata drop policy applied: categories=${_suri_drop_cats}"
+    else
+      echo "[pfsense] Suricata drop policy reverted (SURICATA_DROP_CATEGORIES empty)"
+    fi
+  else
+    # NOTE: this only SKIPS the applier — it does NOT revert an already-applied
+    # policy. A previously-materialised drop list stays in config.xml. To revert,
+    # set SURICATA_DROP_CATEGORIES= (empty) with the policy enabled.
+    echo "[pfsense] Skipping Suricata inline-drop policy (SURU_SURICATA_DROP_POLICY=false — existing state left as-is)"
+  fi
+
+  # --- pf state-table tuning — hardware-adaptive --------------------------------
+  # Sets system/maximumstates to prevent RAM exhaustion under heavy traffic.
+  # Enables adaptive state expiry (60%→120% threshold) for graceful degradation.
+  # Skipped when SURU_PF_TUNING=false (operator opt-out).
+  if [[ "${SURU_PF_TUNING:-true}" == "true" ]]; then
+    local pf_pf_tuning="${_PF_REMOTE_STAGING}/pf-tuning-apply.php"
+    _pf_stage_and_install "${_PF_APPLIER_PF_TUNING}" "${pf_pf_tuning}"
+    _pf_remote_exec "${_SURISUDO}php ${pf_pf_tuning} --max-states=${_hw_pf_max_states} --adaptive"
+    echo "[pfsense] pf tuning applied: max-states=${_hw_pf_max_states} adaptive=enabled"
+  else
+    echo "[pfsense] Skipping pf state-table tuning (SURU_PF_TUNING=false)"
+  fi
+
+  # --- DNS/unbound cache tuning — hardware-adaptive ----------------------------
+  # Sets unbound message-cache and rrset-cache sizes for pfBlockerNG DNSBL performance.
+  # Skipped when SURU_DNS_TUNING=false (operator opt-out).
+  if [[ "${SURU_DNS_TUNING:-true}" == "true" ]]; then
+    local pf_dns_tuning="${_PF_REMOTE_STAGING}/dns-tuning-apply.php"
+    _pf_stage_and_install "${_PF_APPLIER_DNS_TUNING}" "${pf_dns_tuning}"
+    _pf_remote_exec "${_SURISUDO}php ${pf_dns_tuning} --msg-cache-mb=${_hw_unbound_msg_cache_mb} --rrset-cache-mb=${_hw_unbound_rrset_cache_mb}"
+    echo "[pfsense] DNS tuning applied: msg-cache=${_hw_unbound_msg_cache_mb}MB rrset-cache=${_hw_unbound_rrset_cache_mb}MB"
+  else
+    echo "[pfsense] Skipping DNS/unbound cache tuning (SURU_DNS_TUNING=false)"
+  fi
 
   # --- Deploy Zeek via XML model (GUI-aware) ---------------------------------
   # Stage rendered .zeek scripts under /tmp/suru-staging/zeek-scripts/, then
@@ -724,7 +938,7 @@ EOPHP
     fi
     local pf_zeek_iface_applier="${_PF_REMOTE_STAGING}/zeek-iface-apply.php"
     _pf_stage_and_install "${_PF_APPLIER_ZEEK_IFACE}" "${pf_zeek_iface_applier}"
-    _pf_remote_exec "${_ZSUDO}php ${pf_zeek_iface_applier} '${ZEEK_IFACE}'"
+    _pf_remote_exec "${_ZSUDO}php ${pf_zeek_iface_applier} '${ZEEK_IFACE}' '${_hw_zeek_lb_procs}'"
   else
     echo "[pfsense] WARN: ZEEK_IFACE is unset — skipping Zeek interface config."
     echo "[pfsense]       node.cfg will keep its current interface. Set ZEEK_IFACE in .env."
@@ -775,7 +989,7 @@ EOPHP
       echo "[pfsense] pfBlockerNG IP-config secrets staged (GeoIP/ASN enable on demand)."
     fi
 
-    _pf_remote_exec "${_PFGSUDO}php ${pf_pfb_globals_remote} ${_pfb_ip_secrets_remote}"
+    _pf_remote_exec "${_PFGSUDO}php ${pf_pfb_globals_remote} ${_pfb_ip_secrets_remote} --table-entries=${_hw_pf_table_entries}"
 
     # Shred the staged secrets file after the applier has consumed it.
     if [[ -n "${_pfb_ip_secrets_remote}" && "${dry_run}" != "true" ]]; then
@@ -799,6 +1013,15 @@ EOPHP
   # Deploy succeeded — disarm the auto-revert trap so a failure in the
   # purely-informational verify/validate blocks below doesn't roll us back.
   trap - ERR
+
+  # Reaching this line means every risky step (incl. the inline flip) completed
+  # AND we are still reachable over SSH — connectivity survived. Cancel the
+  # router-side dead-man's-switch so no auto-revert fires. If we had instead lost
+  # SSH mid-deploy, control never reaches here, the timer is left armed, and the
+  # router reverts itself to legacy — restoring the management path.
+  if [[ "${_pf_safety_armed}" == "true" ]]; then
+    safety_timer_disarm
+  fi
 
   # --- Post-deploy XML drift verify -------------------------------------------
   # Reads /conf/config.xml on the router and warns if SURU-managed XML nodes

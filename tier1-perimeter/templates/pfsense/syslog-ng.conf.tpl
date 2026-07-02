@@ -8,11 +8,14 @@
 # Rendered by: tier1-perimeter/scripts/platforms/pfsense.sh _pf_deploy_syslogng
 #
 # Template tokens (substituted by pfsense.sh _pf_deploy_syslogng):
-#   @@FRONTDOOR_SYSLOG_SNI@@ — SNI hostname for the frontdoor stream demux (env: FRONTDOOR_SYSLOG_SNI, default: syslog.suru.local)
-#   @@FRONTDOOR_PORT@@       — Frontdoor port, literal 443 (env: FRONTDOOR_PORT, default: 443)
-#   @@SENSOR_NAME@@          — human label for this sensor    (env: ROUTER_SENSOR_NAME, default: pfsense-tier1)
-#   @@WAN_IFACE@@            — WAN interface (informational; Suricata uses glob) (env: WAN_IFACE, default: igb0)
-#   @@LAN_IFACE@@            — LAN interface (informational; Suricata uses glob) (env: LAN_IFACE, default: igb1)
+#   @@FRONTDOOR_SYSLOG_SNI@@          — SNI hostname for the frontdoor stream demux (env: FRONTDOOR_SYSLOG_SNI, default: syslog.suru.local)
+#   @@FRONTDOOR_PORT@@                — Frontdoor port, literal 443 (env: FRONTDOOR_PORT, default: 443)
+#   @@SENSOR_NAME@@                   — human label for this sensor    (env: ROUTER_SENSOR_NAME, default: pfsense-tier1)
+#   @@WAN_IFACE@@                     — WAN interface (informational; Suricata uses glob) (env: WAN_IFACE, default: igb0)
+#   @@LAN_IFACE@@                     — LAN interface (informational; Suricata uses glob) (env: LAN_IFACE, default: igb1)
+#   @@SYSLOGNG_DISK_BUFFER_BYTES@@    — hw-adaptive reliable disk-buffer capacity in bytes
+#                                       (env: SURU_HW_SYSLOGNG_DISK_BUFFER_BYTES from hw-profile.conf)
+#                                       Default: 4294967296 (4 GB). Scales 1–8 GB with available disk.
 #
 # Log sources forwarded (pfSense live paths — confirmed 2026-05-28 on pfSense 2.7/FreeBSD 14):
 #   Suricata EVE  /var/log/suricata/suricata_*/eve.json   wildcard-file(recursive), all iface UUID dirs
@@ -101,11 +104,12 @@ destination d_siem_tls {
         # Survives syslog-ng restarts and SIEM outages — position is tracked
         # in the queue file and replay is automatic on reconnect.
         # dir() omitted: uses syslog-ng default (/var/db, same as persist file).
-        # capacity-bytes: 5 GB pre-allocated ceiling on the queue file.
+        # capacity-bytes: hw-adaptive ceiling (1–8 GB), set by hw-preflight from
+        #   SURU_HW_SYSLOGNG_DISK_BUFFER_BYTES (scales with available disk space).
         # flow-control-window-bytes: 10 MB in-memory window before spilling to disk.
         disk-buffer(
             reliable(yes)
-            capacity-bytes(5368709120)
+            capacity-bytes(@@SYSLOGNG_DISK_BUFFER_BYTES@@)
             flow-control-window-bytes(10485760)
         )
     );

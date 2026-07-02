@@ -500,8 +500,16 @@ All variables are defined in `.env` (copied from `.env.example`):
 | `SSH_STRICT_HOST_KEY_CHECKING` | — | `yes` | SSH host key enforcement |
 | `FRONTDOOR_SYSLOG_SNI` | ✅ | `syslog.suru.local` | SNI hostname presented by syslog-ng to the Tier 4 frontdoor stream demux; nginx routes this SNI to logstash-pfsense:5140 via TCP passthrough |
 | `FRONTDOOR_PORT` | — | `443` | Port for all Tier 1 → frontdoor connections (literal port 443) |
-| `SURICATA_IFACES` | — | `lan` | Comma-separated pfSense logical interface names for Suricata (e.g. `lan,opt1`). Registers missing entries in XML and applies rule selection to all. |
-| `SURICATA_IFACE` | — | — | **Deprecated** single-interface alias; honoured as fallback when `SURICATA_IFACES` is unset |
+| `SURICATA_IFACES` | — | `igb1` | Comma-separated **physical NIC names only** (e.g. `igb1,igb2` / `eth0,eth1`) — one Suricata instance per NIC. pfSense logical aliases (`lan`, `opt1`) and VLAN sub-interfaces (`igb1.10`) are **rejected at deploy time**; on pfSense the deploy resolves each NIC to a carrier alias internally via `suru-iface-resolve.php`. Same contract as `ZEEK_IFACE`. |
+| `SURICATA_IPS_MODE` | — | `legacy` | Capture/enforcement mode. `legacy` = pcap capture + reactive pf-table block. `inline` = netmap in-flight drop on the physical NIC (Suricata joins the datapath; arms the inline-flip dead-man's-switch first). |
+| `SURICATA_NETMAP_THREADS` | — | auto | Explicit netmap threads (1-8) for inline mode; unset = `min(NIC netmap queues, ncpu/2)` computed on the router (never `auto`). |
+| `SURICATA_DROP_CATEGORIES` | — | CRITICAL set | ET categories converted `alert→drop` so inline mode enforces (default: `emerging-botcc,emerging-malware,emerging-exploit,emerging-attack_response`). Empty value reverts the drop policy. |
+| `SURU_SURICATA_DROP_POLICY` | — | `true` | Set `false` to skip the drop-policy applier (does not revert an applied policy). |
+| `SURU_SAFETY_TIMER` | — | `true` | Arm a router-side auto-revert before an inline flip (self-lockout guard); disarmed on success. |
+| `SURU_SAFETY_REVERT_SECONDS` | — | `600` | Dead-man's-switch window (min 30) before the router auto-reverts to legacy if the deploy never disarms. |
+| `SURU_SKIP_HW_PREFLIGHT` | — | `false` | Skip hardware detection; deploy uses conservative built-in defaults (4 GB / 4-core profile). |
+| `SURU_SURICATA_TUNING` / `SURU_PF_TUNING` / `SURU_DNS_TUNING` | — | `true` | Per-applier opt-outs for the hardware-adaptive tuning steps (Suricata detect profile/memcaps, pf state-table, unbound cache). |
+| `SURICATA_IFACE` | — | — | **Deprecated** single-interface alias; honoured as fallback when `SURICATA_IFACES` is unset (physical NIC only). |
 | `ZEEK_IFACE` | — | `em0` | **Physical trunk interface** for Zeek (e.g. `igb1`, `em0`). Unlike Suricata, Zeek's interface is written directly into `local.zeek`/`node.cfg` — use the parent trunk, not a VLAN sub-interface. Zeek understands 802.1Q natively: one sensor on the trunk covers all VLANs. |
 | `ZEEK_MAILTO` | — | `root` | zeekctl alert email recipient; baked into rendered `zeekctl.cfg` |
 | `API_AUTH_MODE` | — | `api_key` | Router API auth mode: `api_key` (automation) \| `jwt` (short-lived, pfSense only) |

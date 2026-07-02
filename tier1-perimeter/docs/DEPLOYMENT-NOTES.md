@@ -236,8 +236,9 @@ make deploy
 
 ## syslog-ng Queue Monitoring
 
-syslog-ng forwards all log sources to the Tier 3 SIEM via mTLS. A **5 GB reliable
-disk-buffer** (`/var/db/syslog-ng-00000.rqf`) absorbs messages when the SIEM is
+syslog-ng forwards all log sources to the Tier 3 SIEM via mTLS. A **hardware-adaptive
+reliable disk-buffer** (`/var/db/syslog-ng-00000.rqf`, sized 1–8 GB by available disk —
+default 4 GB — via the hardware preflight) absorbs messages when the SIEM is
 unreachable and replays them automatically on reconnect. Position is tracked in
 `/var/db/syslog-ng.persist` across restarts.
 
