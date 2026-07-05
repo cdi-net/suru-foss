@@ -23,6 +23,20 @@ pfblockerng/
 Block-list categories MUST NOT be hardcoded into `tier1-perimeter/` templates or scripts.
 All feed policy lives here. Platform drivers in T1 read from `rendered/` only.
 
+## Secrets in Feed URLs — `@@VAR@@` Token Convention
+
+A feed that needs an API key MUST NOT carry the real key in this directory or in
+`rendered/` output. Instead the URL embeds an `@@VAR_NAME@@` token — the same
+env-token style the tier1 syslog-ng template uses. At deploy time,
+`tier1-perimeter/scripts/platforms/pfsense.sh` substitutes the matching variable
+from `tier1-perimeter/.env` into the **staged copy only**; if the variable is
+unset (or fails the alphanumeric injection guard), the entire token-bearing feed
+row is deleted from the staged importer, so pfBlockerNG never fetches a
+token-literal URL and `verify-pfblockerng-feeds.sh` stays green.
+
+Current tokens: `@@ABUSEIPDB_API_KEY@@` (`SURU_AbuseIPDB` row in `SURU_IP_REP`,
+`ip-categories.yml`) ← `ABUSEIPDB_API_KEY` in `tier1-perimeter/.env`.
+
 ## MITRE ATT&CK Coverage
 
 Each feed entry in `dnsbl-categories.yml` SHOULD include a `mitre:` list mapping
