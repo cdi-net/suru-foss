@@ -538,6 +538,41 @@ Both → HTTP 200. Delete: `DELETE _plugins/_notifications/configs/<id>` →
 HTTP 200 `{"delete_response_list":{"<id>":"OK"}}`. All four calls (2 creates,
 2 deletes) confirmed live and cleaned up.
 
+### SMTP AUTH — OpenSearch keystore AffixSettings
+
+The `smtp_account` config JSON carries **no** username/password field — SMTP
+AUTH is supplied exclusively via the node's OpenSearch **keystore**, as
+AffixSettings `opensearch.notifications.core.email.<account>.username` /
+`.password` (`PluginSettings.EMAIL_USERNAME`/`EMAIL_PASSWORD` in
+`opensearch-notifications-core-3.7.0.0.jar` — both `SecureSetting.secureString`
+AffixSettings). `<account>` is the `smtp_account` config's own `name`
+(`SmtpDestination.accountName`); SURU uses `suru_security_analytics_smtp`.
+`mail.smtp.auth` is enabled by the client whenever `method != none`.
+
+`opensearch-notifications-core`'s plugin class (`NotificationCorePlugin`)
+implements `ReloadablePlugin`; its `reload(Settings)` re-derives destination
+settings from the reloaded keystore (`PluginSettings.loadDestinationSettings` /
+`setDestinationSettings`). So `POST _nodes/reload_secure_settings` makes
+new/rotated SMTP AUTH creds live **without a node restart** — verified
+end-to-end by a `_plugins/_notifications/feature/test/<email_channel_id>` send
+returning `delivery_status: 200 Success` to a real inbox.
+
+`apply-security-analytics.sh`'s `provision_smtp_keystore_auth` writes both keys
+via `opensearch-keystore add --stdin --force` (stdin only — never argv/log),
+then calls `reload_secure_settings`; blanking both env vars removes any
+previously-provisioned keys. Requires the `opensearch-config` named volume
+mounted **rw** into the init container (see `securityanalytics-init` in
+`datalake/opensearch/compose.yaml`) — writable under the full hardening profile
+(`cap_drop: ALL`, `no-new-privileges`, `read_only` rootfs, non-root
+`1000:1000`; the keystore file is created uid/gid 1000 on the node's first boot,
+before `securityanalytics-init` runs via the `depends_on` chain). This is the
+product-native secure-keystore credential-injection model — the secret never
+touches the config JSON, an env var in the running node, or a log line.
+
+Hardening follow-up: the rw mount grants the init container write access to the
+whole config dir (certs, `internal_users.yml`) for its run, not just
+`opensearch.keystore` — scoping it via a volume `subpath` is a future refinement.
+
 **Not yet confirmed:** how a detector's `triggers[].actions[]` actually
 *references* a Notifications `email`-type config_id at the Security
 Analytics layer (i.e. the `trigger.actions[]` binding schema mentioned in
