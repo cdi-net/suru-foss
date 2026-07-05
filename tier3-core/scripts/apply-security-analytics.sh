@@ -565,6 +565,76 @@ apply_actions() {
 # Requires SECURITY_ANALYTICS_SMTP_HOST to be set (non-empty) — otherwise the
 # operator has left SMTP unconfigured (SECURITY_ANALYTICS_SMTP_METHOD=none per
 # .env.example) and this is a deliberate no-op, not an error.
+# _reload_secure_settings <os_user> <admin_pass> <os_host> <os_port>
+# Make on-disk keystore changes live on the running node (no restart). The
+# notifications-core plugin is a ReloadablePlugin, so its SMTP AUTH is re-derived
+# from the reloaded keystore.
+_reload_secure_settings() {
+  local os_user="$1" admin_pass="$2" os_host="$3" os_port="$4"
+  local response_file http_code
+  response_file="$(_mktemp)"
+  http_code="$(curl -sk -o "${response_file}" -w '%{http_code}' \
+    -X POST -u "${os_user}:${admin_pass}" \
+    "https://${os_host}:${os_port}/_nodes/reload_secure_settings")" || true
+  case "${http_code}" in
+    200) log_info "OK — reloaded secure settings" ;;
+    *)   log_warn "reload_secure_settings returned HTTP ${http_code} — keystore updated but the node may not have reloaded: $(cat -- "${response_file}")" ;;
+  esac
+}
+
+# provision_smtp_keystore_auth <account> <username> <password> <os_user> <admin_pass> <os_host> <os_port>
+# The OpenSearch Notifications plugin reads SMTP AUTH credentials from the node
+# keystore as AffixSettings — opensearch.notifications.core.email.<account>.username
+# and .password (the smtp_account config JSON cannot carry the secret).
+# <account> is the smtp_account config's own name (SmtpDestination.accountName ==
+# the config name). Both keys are written via stdin (no argv/ps exposure) then
+# reload_secure_settings makes the running node pick them up without a restart.
+# Requires the opensearch image (opensearch-keystore on PATH) with the shared
+# opensearch-config volume mounted rw. Empty username/password => provision the
+# account WITHOUT AUTH (unauthenticated relay / method=none).
+provision_smtp_keystore_auth() {
+  local account="$1" username="$2" password="$3" os_user="$4" admin_pass="$5" os_host="$6" os_port="$7"
+
+  if ! command -v opensearch-keystore >/dev/null 2>&1; then
+    log_warn "opensearch-keystore not on PATH — cannot manage SMTP AUTH in the keystore (authenticated email will fail). This step must run in the opensearch image with the opensearch-config volume mounted rw."
+    return 0
+  fi
+
+  local kprefix="opensearch.notifications.core.email.${account}"
+
+  # Blanked credentials => tear down any previously-provisioned AUTH so an
+  # operator falling back to an unauthenticated relay isn't silently left with
+  # stale keystore creds. Only reload if something was actually removed.
+  if [[ -z "${username}" || -z "${password}" ]]; then
+    if opensearch-keystore list 2>/dev/null | grep -qx "${kprefix}.username"; then
+      log_info "SMTP username/password unset — removing stale keystore AUTH (${kprefix}.*)"
+      opensearch-keystore remove "${kprefix}.username" 2>/dev/null || true
+      opensearch-keystore remove "${kprefix}.password" 2>/dev/null || true
+      _reload_secure_settings "${os_user}" "${admin_pass}" "${os_host}" "${os_port}"
+    else
+      log_info "SMTP username/password not set — smtp_account provisioned WITHOUT keystore AUTH (relay must accept unauthenticated relay or method=none)"
+    fi
+    return 0
+  fi
+
+  log_info "Provisioning SMTP AUTH into OpenSearch keystore: ${kprefix}.{username,password}"
+
+  # Secrets are fed via stdin (never argv/URL/sed), so no charset splicing risk;
+  # keep them out of any xtrace regardless. A failure after the .username write
+  # leaves a half-provisioned pair, but the next --force run self-heals it.
+  set +x
+  if ! printf '%s' "${username}" | opensearch-keystore add --stdin --force "${kprefix}.username" 2>/dev/null; then
+    log_warn "Failed to write ${kprefix}.username — email AUTH not provisioned"
+    return 0
+  fi
+  if ! printf '%s' "${password}" | opensearch-keystore add --stdin --force "${kprefix}.password" 2>/dev/null; then
+    log_warn "Failed to write ${kprefix}.password — email AUTH not provisioned (partial: .username written, will self-heal on re-run)"
+    return 0
+  fi
+
+  _reload_secure_settings "${os_user}" "${admin_pass}" "${os_host}" "${os_port}"
+}
+
 apply_email_action() {
   local action_file="$1" os_user="$2" pass="$3" os_host="$4" os_port="$5"
 
@@ -586,13 +656,21 @@ apply_email_action() {
 
   log_info "Email action: ${action_file} -> smtp_account + email channel (host: ${smtp_host})"
 
+  local smtp_username="${SECURITY_ANALYTICS_SMTP_USERNAME:-}"
+  local smtp_password="${SECURITY_ANALYTICS_SMTP_PASSWORD:-}"
+
   if ${DRY_RUN}; then
-    log_info "  [dry-run] would create/verify smtp_account + email Notifications channel"
+    log_info "  [dry-run] would provision keystore SMTP AUTH (if username/password set) + reload, then create/verify smtp_account + email Notifications channel"
     return 0
   fi
 
   local smtp_channel_name="suru_security_analytics_smtp"
   local email_channel_name="suru_security_analytics_email"
+
+  # Write SMTP AUTH creds to the keystore BEFORE the account is used, keyed by
+  # the smtp_account name (== SmtpDestination.accountName). Idempotent/rotation-
+  # safe (--force), and runs whether or not the account already exists.
+  provision_smtp_keystore_auth "${smtp_channel_name}" "${smtp_username}" "${smtp_password}" "${os_user}" "${pass}" "${os_host}" "${os_port}"
 
   local smtp_id
   smtp_id="$(notifications_config_id_by_name "${smtp_channel_name}" "${os_user}" "${pass}" "${os_host}" "${os_port}")" || true

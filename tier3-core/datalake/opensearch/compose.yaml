@@ -585,6 +585,12 @@ services:
       SECURITY_ANALYTICS_SMTP_FROM: "${SECURITY_ANALYTICS_SMTP_FROM:-siem@suru.local}"
       SECURITY_ANALYTICS_ALERT_EMAIL_TO: "${SECURITY_ANALYTICS_ALERT_EMAIL_TO:-}"
       SECURITY_ANALYTICS_ALERT_EMAIL_CC: "${SECURITY_ANALYTICS_ALERT_EMAIL_CC:-}"
+      # SMTP AUTH credentials — written into the node keystore by
+      # apply-security-analytics.sh (provision_smtp_keystore_auth), NOT into the
+      # smtp_account config JSON (the Notifications plugin reads them as keystore
+      # AffixSettings opensearch.notifications.core.email.<account>.{username,password}).
+      SECURITY_ANALYTICS_SMTP_USERNAME: "${SECURITY_ANALYTICS_SMTP_USERNAME:-}"
+      SECURITY_ANALYTICS_SMTP_PASSWORD: "${SECURITY_ANALYTICS_SMTP_PASSWORD:-}"
     user: "1000:1000"
     security_opt:
       - no-new-privileges:true
@@ -599,6 +605,13 @@ services:
       - ../../config/opensearch/security-analytics/actions:/config/actions:ro
       - ../../../tier2-telemetry/opensearch/field-mappings:/config/field-mappings:ro
       - ../../scripts/apply-security-analytics.sh:/apply-security-analytics.sh:ro
+      # Shared node config volume (rw) — required so provision_smtp_keystore_auth
+      # can write SMTP AUTH creds into opensearch.keystore. This is the same
+      # volume the node mounts at /usr/share/opensearch/config; opensearch-keystore
+      # writes atomically (temp+rename) and a reload_secure_settings call makes the
+      # running node pick them up without a restart. The read_only rootfs above
+      # still holds — named-volume mounts remain writable.
+      - opensearch-config:/usr/share/opensearch/config
     entrypoint: ["/bin/bash", "/apply-security-analytics.sh"]
     networks:
       - datalake-internal
