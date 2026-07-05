@@ -1,0 +1,25 @@
+# SURU Custom Rules — DNS-over-HTTPS (DoH) resolver-bypass detection
+# MITRE ATT&CK: TA0005 Defense Evasion / T1572 Protocol Tunneling;
+#               TA0011 Command and Control / T1071.001 Web Protocols
+#
+# SID block: 9990000–9999999 (SURU project-local range; never overlaps ET Open)
+#
+# Each rule MUST be on a single physical line — Suricata requires it.
+# Validation: suricata -T -S suru-doh-bypass.rules
+#   (or on the router: sudo suricata -T -c <iface suricata.yaml> -S /tmp/suru-doh-bypass.rules)
+#
+# This is the INLINE leg of DoH detection; suru-doh-detect.zeek is the passive
+# ssl.log leg (two engines, defense-in-depth). A client resolving names over
+# HTTPS bypasses the local unbound + pfBlockerNG DNSBL enforcement entirely.
+#
+# Router upstream-DoH exemption: if the pfSense resolver itself is configured to
+# forward over DoH, add the router's WAN/egress IP to the Suricata Pass List so the router's
+# own upstream DoH does not alert — do NOT hardcode an exception here.
+#
+# FP note: Firefox and iOS/macOS enable DoH by default, so this fires on benign
+# hosts too — it is a policy-visibility control as much as a threat detector.
+# The tls.sni alternation is the published DoH endpoint hostname set; keep it in
+# sync with suru-doh-detect.zeek's doh_endpoints.
+
+# ── Rule 9990003 — DoH endpoint SNI from an internal client (TA0005/T1572, TA0011/T1071.001) ──
+alert tls $HOME_NET any -> $EXTERNAL_NET any (msg:"SURU DoH Resolver Bypass - Known DoH endpoint SNI (TA0005/T1572, TA0011/T1071.001)"; flow:established,to_server; tls.sni; pcre:"/^(?:cloudflare-dns\.com|mozilla\.cloudflare-dns\.com|chrome\.cloudflare-dns\.com|one\.one\.one\.one|dns\.google|dns\.quad9\.net|doh\.opendns\.com|dns\.nextdns\.io|doh\.cleanbrowsing\.org|dns\.adguard-dns\.com)$/i"; classtype:policy-violation; sid:9990003; rev:1; metadata:tactic TA0005, technique T1572, affected_product Any, deployment Perimeter, falsepositives Firefox_iOS_macOS_enable_DoH_by_default_and_router_upstream_DoH;)

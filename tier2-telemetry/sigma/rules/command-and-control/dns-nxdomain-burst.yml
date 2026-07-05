@@ -1,0 +1,53 @@
+# SURU Platform — Sigma Rule: DNS NXDOMAIN burst / DGA beaconing
+# MITRE ATT&CK: TA0011 Command and Control / T1568.002 (Dynamic Resolution:
+# Domain Generation Algorithms)
+# Source: Zeek dns.log, normalized to ECS v8 by the tier3-core Logstash Zeek
+# pipeline (event.dataset:"dns", dns.response_code:"NXDOMAIN"). As with the
+# port-scan rule, the Sigma selection scopes the qualifying event population
+# (failed-resolution DNS responses); the per-source distinct-domain cardinality
+# threshold that distinguishes "a typo / one dead domain retried" from
+# "algorithmic domain cycling" is applied by the binding OpenSearch detector's
+# aggregation (Layer 2), not in a single-event Sigma selection.
+#
+# Complements — does not duplicate — suru-dns-entropy.zeek (T1071.004), which
+# catches DNS *tunneling* (high-entropy payload in a resolving subdomain). This
+# rule catches the opposite DGA failure mode: a host rapidly querying MANY
+# distinct algorithmically-generated names, most of which do NOT resolve
+# (NXDOMAIN), as malware hunts for its live C2 rendezvous domain.
+# Validation: sigma check dns-nxdomain-burst.yml
+references:
+  - https://attack.mitre.org/techniques/T1568/002/
+title: SURU - DNS NXDOMAIN Burst (DGA beaconing, Zeek dns heuristic)
+id: 7b4e3f2a-0020-4c6d-9e0f-b2c3d4e5f6b8
+status: experimental
+description: |
+  Detects a burst of failed DNS resolutions (NXDOMAIN) from a single internal
+  host — the signature of Domain Generation Algorithm (DGA) malware cycling
+  through many algorithmically-generated candidate C2 domains until one
+  resolves. The Sigma selection scopes to the NXDOMAIN event population; the
+  binding OpenSearch detector (Layer 2) applies the per-source
+  distinct-domain cardinality threshold over a time window that actually
+  distinguishes DGA cycling from a single mistyped or dead domain retried.
+author: SURU Detection Engineering / SURU Platform
+date: 2026/07/05
+modified: 2026/07/05
+tags:
+  - attack.ta0011
+  - attack.t1568.002
+logsource:
+  category: dns
+  product: zeek
+  service: dns
+detection:
+  selection:
+    event.dataset: dns
+    dns.response_code: NXDOMAIN
+  condition: selection
+falsepositives:
+  - Chrome/Chromium random-hostname DNS probes at startup (3 x 7-15 char random
+    labels) — a small fixed burst, well under the distinct-domain threshold
+  - Hosts behind a broken/misconfigured search-domain suffix generating repeated
+    NXDOMAIN for a SMALL set of names (low distinct-name cardinality)
+  - Antivirus / telemetry clients probing many subdomains of ONE parent domain
+    (dedupe by registered domain if this proves noisy)
+level: high
