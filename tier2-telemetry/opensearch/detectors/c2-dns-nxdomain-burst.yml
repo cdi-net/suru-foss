@@ -1,0 +1,95 @@
+# SURU Platform — Layer 2 Detector: C2 / DNS NXDOMAIN Burst (DGA beaconing)
+# Binds Layer-1 Sigma rule:
+#   tier2-telemetry/sigma/rules/command-and-control/dns-nxdomain-burst.yml [T1568.002]
+# to the suru_zeek_dns (Layer 3) field-mapping / suru-zeek-* index pattern.
+#
+# Coverage map category: 2 (Command and Control) — docs/detection-coverage-map.md §2
+#
+# Tier 1 boundary: Tier 1 already blocks known-malicious domains at the DNS
+# layer via pfBlockerNG DNSBL (SURU_URLhaus_Malware / OpenPhish / etc.,
+# docs/detection-coverage-map.md §1.3) and DGA/C2-over-DNS signatures via
+# Suricata's emerging-dns category (§1.1). A DGA domain that is ALREADY on a
+# DNSBL feed is blocked at resolution (event.action / threat.indicator set);
+# the exclusion predicates below de-dup those so the SIEM only surfaces DGA
+# cycling that Tier 1 has NOT already adjudicated — per the Tier 1 <-> SIEM
+# boundary contract (Tier 1 <-> SIEM de-dup: standalone detectors exclude events Tier 1 already adjudicated; correlation rules do not).
+#
+# Cardinality note: the aggregation counts DISTINCT NXDOMAIN query names per
+# source (metric = cardinality(dns.question.name)), NOT raw NXDOMAIN volume —
+# a single dead/typo'd domain retried 100 times is one distinct name (benign);
+# DGA cycling produces many distinct random names (malicious). This is the key
+# that separates the two, and it is why the metric is a cardinality, not a count.
+#
+# Verification: static (YAML/field validation) this session. Live-detection
+# confirmation (inject an NXDOMAIN burst of distinct names, confirm a finding)
+# is NOT YET RUN — static validity and live-fire behavior are independent
+# checks; assert only what has been observed.
+
+name: c2-dns-nxdomain-burst
+detector_name: suru-c2-dns-nxdomain-burst
+detector_type: dns
+status: buildable
+buildable: true
+owner_tier: tier2-telemetry
+index_pattern: suru-zeek-*
+log_type: suru_zeek_dns
+field_mapping_ref: tier2-telemetry/opensearch/field-mappings/suru_zeek_dns.yml
+
+sigma_rules:
+  - ref: tier2-telemetry/sigma/rules/command-and-control/dns-nxdomain-burst.yml
+    id: 7b4e3f2a-0020-4c6d-9e0f-b2c3d4e5f6b8
+
+mitre:
+  tactics:
+    - id: TA0011
+      name: Command and Control
+  techniques:
+    - id: T1568.002
+      name: "Dynamic Resolution: Domain Generation Algorithms"
+
+detection_filter:
+  # Mirrors the Sigma selection: failed-resolution DNS events.
+  query: 'event.dataset:"dns" AND dns.response_code:"NXDOMAIN"'
+  aggregation:
+    group_by: source.ip
+    # Distinct failed domains per source — the DGA discriminator (see header).
+    metric: cardinality(dns.question.name)
+    # Seed threshold — flagged for per-environment tuning before promoting
+    # from email-only to perimeter_block. A DGA host typically produces dozens
+    # to hundreds of distinct NXDOMAINs per minute; 30 distinct in 10 min is a
+    # conservative floor that clears normal broken-suffix / browser-probe noise.
+    threshold: 30
+    window_minutes: 10
+
+schedule:
+  period_minutes: 5
+
+exclusion_predicates:
+  # Tier 1 <-> SIEM de-dup: do not re-alert on a domain/source Tier 1 already
+  # blocked at the DNS or IPS layer for the same activity.
+  - description: pfSense firewall already blocked this source
+    query: 'NOT event.action:"block"'
+  - description: Suricata emerging-dns already flagged this DNS activity
+    query: 'NOT event.action:"blocked"'
+  - description: pfBlockerNG DNSBL feed already blocked this domain (any IOC type present)
+    query: 'NOT threat.indicator.type:*'
+
+actions:
+  default: email
+  perimeter_block: false   # opt-in only — not enabled until FP rate is proven via email alerts
+
+falsepositives:
+  - Hosts behind a broken search-domain suffix generating repeated NXDOMAIN for
+    a SMALL set of names — low distinct-name cardinality, filtered by the metric
+  - Chrome/Chromium startup random-hostname probes (a small fixed burst)
+  - Security/telemetry clients probing many subdomains of ONE parent domain —
+    allowlist the source.ip or dedupe by registered domain if noisy
+
+verification:
+  static: passed
+  live_detection_confirmed: false
+  rationale: >
+    Static YAML + ECS field-existence checks passed this session
+    (dns.response_code and dns.question.name are confirmed live fields per the
+    suru_zeek_dns.yml Layer-3 field-mapping). A live
+    NXDOMAIN-burst injection with a finding confirmation has not been run.

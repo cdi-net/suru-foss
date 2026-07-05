@@ -69,8 +69,18 @@ aliases:
   # the URL now returns a "merged into drop.txt" notice with zero entries.
   # DROP (SURU_SpamhausDrop, below) already carries the merged content.
   # ---------------------------------------------------------------------------
+  # SURU_AbuseIPDB (added): AbuseIPDB high-confidence blacklist. The URL carries
+  # an @@ABUSEIPDB_API_KEY@@ token — NEVER a real key (no secrets in feed
+  # manifests). tier1-perimeter's deploy substitutes ABUSEIPDB_API_KEY from
+  # .env into the staged importer copy, or DROPS this row when the key is unset.
+  # Free-plan blacklist caps at 10,000 entries — well within the pf table budget.
+  # MITRE ATT&CK: TA0001/T1190 (exploit/scan sources), TA0006/T1110 (brute-force).
+  # [MISSING REFERENCE: key-as-query-param auth + &plaintext output format are
+  # taken from community pfBlockerNG usage, not verified AbuseIPDB docs — confirm
+  # on first live fetch: /var/db/pfblockerng/deny/SURU_AbuseIPDB_v4.txt must exist
+  # and contain IPs, per verify-pfblockerng-feeds.sh.]
   - aliasname: SURU_IP_REP
-    description: "SURU Tier 1 — IP reputation (Spamhaus DROP, CINS, ET Block, AlienVault, BlockList.de)"
+    description: "SURU Tier 1 — IP reputation (Spamhaus DROP, CINS, ET Block, AlienVault, BlockList.de, AbuseIPDB)"
     action: Deny_Both
     cron: EveryDay
     feeds:
@@ -92,6 +102,10 @@ aliases:
         state: Enabled
       - header: SURU_BlockListDE
         url: https://lists.blocklist.de/lists/all.txt
+        format: auto
+        state: Enabled
+      - header: SURU_AbuseIPDB
+        url: "https://api.abuseipdb.com/api/v2/blacklist?confidenceMinimum=90&plaintext&key=@@ABUSEIPDB_API_KEY@@"
         format: auto
         state: Enabled
 

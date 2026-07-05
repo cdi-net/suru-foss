@@ -15,17 +15,20 @@
 # real detector. Re-author this rule against the real endpoint ECS schema
 # once T1c's endpoint field-mapping bridge lands and a live source exists.]
 # Migrated from (retired): sigma-rules/lateral-movement/t1021-remote-services.yaml
-title: SURU - Remote Services Lateral Movement (STUB — no live ECS source)
+title: SURU - Remote Services Lateral Movement (DEPRECATED — superseded by suru-lateral-movement.zeek)
 id: suru-lm-001
-status: experimental
+status: deprecated
 description: |
-  Detects suspicious use of remote-access binaries (ssh/scp/rsync) for
-  lateral movement via process-creation telemetry. STUB: no endpoint/EDR
-  telemetry is ingested into this deployment's OpenSearch cluster today, and
-  suru-ecs-template.json has no process.command_line/process.executable
-  mapping to bind this rule's `Image`/`CommandLine` fields to. This rule
-  cannot fire until an endpoint data source is added (see T1c stub scaffold,
-  tier2-telemetry/opensearch/field-mappings/suru_endpoint.yml).
+  DEPRECATED 2026-07-05. This endpoint-telemetry stub (process-creation
+  Image/CommandLine, no live ECS source on this deployment) is superseded by
+  the network-observable Zeek NOTICE detection
+  tier2-telemetry/zeek/scripts/suru-lateral-movement.zeek, which fires on the
+  fan-out of established connections to distinct internal hosts on remote-admin
+  ports (SSH/SMB/RDP/VNC) — the same T1021 intent, detectable from data this
+  deployment actually ingests. Kept for history; re-author against a real
+  endpoint ECS schema only if/when an EDR-agent feed lands and
+  process.command_line/process.executable exist (see the suru_endpoint.yml
+  stub). It binds to no detector and does not fire today.
 references:
   - https://attack.mitre.org/techniques/T1021/
 author: SURU Detection Engineering

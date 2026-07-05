@@ -117,16 +117,37 @@ destination d_siem_tls {
 
 # --- Sources -----------------------------------------------------------------
 
-source s_pfsense_syslog {
-    # flags(syslog-protocol): pfSense syslogd launches with -O rfc5424, so every
-    # message on the socket is in RFC 5424 format (<PRI>1 ISO8601 HOST APP PID - - MSG).
-    # Without this flag, syslog-ng's BSD (RFC 3164) parser extracts the version field
-    # "1" as $PROGRAM — breaking every program() filter. With syslog-protocol, syslog-ng
-    # parses RFC 5424 correctly: $PROGRAM=APPNAME, $PID=PROCID, $MSG=message body.
-    # $FACILITY and $LEVEL are also parsed from <PRI>, so facility() filters work too.
-    unix-dgram("/var/run/log" flags(syslog-protocol));
-    unix-dgram("/var/run/logpriv" perm(0600) flags(syslog-protocol));
-};
+# SURU no longer binds the /var/run/log syslog datagram socket.
+#
+# WHY (2026-07-05 incident — firewall logging dark since 2026-06-30): syslog-ng
+# and pfSense's own syslogd BOTH tried to own /var/run/log. syslog-ng
+# unlink()s-and-rebinds the socket path on every start, so it wins whenever it
+# restarts last. When it wins, pfSense's `filterlog` daemon delivers firewall
+# block events to syslog-ng instead of syslogd, so syslogd stops writing
+# /var/log/filter.log (and dhcpd.log/auth.log/resolver.log) — and syslog-ng's
+# firewall routing reads /var/log/filter.log as a FILE (s_filter_log), which is
+# now frozen. Net effect: pf keeps blocking, but block events never reach the
+# SIEM. pfBlockerNG's ip_block.log (built by php_pfb parsing filter.log) dies
+# with it. This is a socket-competition hazard — the design ONLY works when syslogd
+# owns the socket, and binding it here made that non-deterministic.
+#
+# FIX: read EVERY pfSense log from the FILE syslogd writes (the pattern already
+# used for filterlog/zeek/pfblockerng/etc.), and do NOT bind the socket — so
+# syslogd deterministically owns /var/run/log and writes all files. auth was
+# the only log type that was socket-only (via facility(auth,authpriv)); it now
+# has its own file source below.
+#
+# ACCEPTED SCOPED LOSS — Kea operational syslog: Kea logs to syslog
+# (kea-dhcp4.conf output: syslog, program kea-dhcp4/kea-dhcp6), so its
+# OPERATIONAL/error/lifecycle messages arrived via the socket and are no longer
+# forwarded. This is deliberately accepted, not re-added: DHCP *lease-transaction*
+# visibility — the security-relevant signal — comes from Zeek's network-observed
+# dhcp.log (the router runs Kea, which does not write dhcpd.log); only Kea's
+# own service-health chatter
+# is dropped. If that operational channel is later wanted, point Kea's
+# output-options at a file pfSense writes and add a file() source +
+# program-override("kea-dhcp4") like every other source here.
+source s_auth { file("/var/log/auth.log" follow-freq(1) flags(no-parse) program-override("pfsense-auth")); };
 
 # MITRE ATT&CK: TA0009 Collection / T1005 Data from Local System
 # wildcard-file(recursive) discovers all per-interface UUID dirs automatically
@@ -205,11 +226,17 @@ filter f_firewall   { program("filterlog"); };
 filter f_dhcp       { program("dhcpd") or program("dhclient") or program("kea-dhcp4") or program("kea-dhcp6") or program("kea2unbound"); };
 filter f_dns_all    { program("unbound") or program("dnsmasq"); };
 filter f_vpn        { program("openvpn") or program("ipsec") or program("charon"); };
+# f_auth: UNUSED since 2026-07-05 — auth now arrives via the s_auth file source
+# (flags(no-parse), so facility is not parsed); the auth log path routes the
+# whole s_auth source and does not filter by facility. Retained for reference.
 filter f_auth       { facility(auth, authpriv); };
 filter f_suricata   { program("suricata") or program("suricata-fast"); };
 filter f_zeek       { program("zeek-conn") or program("zeek-dns") or program("zeek-http") or program("zeek-ssl") or program("zeek-notice") or program("zeek-weird") or program("zeek-files") or program("zeek-dhcp"); };
 filter f_pfblocker  { program("pfblockerng-dnsbl") or program("pfblockerng-ip"); };
 filter f_suru_perimeter_block { program("suru-perimeter-block"); };
+# f_drop_noise: UNUSED since 2026-07-05 — it drained residual socket messages
+# from the removed s_pfsense_syslog source; with the socket gone there is no
+# such traffic. Retained for reference.
 filter f_drop_noise { match("last message repeated" value("MESSAGE")) or program("cron"); };
 
 # --- Rewrites ----------------------------------------------------------------
@@ -225,29 +252,37 @@ rewrite r_add_tag_pfblocker { set("pfblockerng",        value(".suru.log_type"))
 rewrite r_add_tag_perimeter_block { set("suru-perimeter-block", value(".suru.log_type")); };
 rewrite r_add_hostname      { set("${HOST}",            value(".suru.sensor")); };
 rewrite r_add_tier          { set("tier1-perimeter",    value(".suru.tier")); };
-rewrite r_add_version       { set("2.7.0",              value(".suru.config_version")); };
+rewrite r_add_version       { set("2.8.0",              value(".suru.config_version")); };
 
 # --- Log paths ---------------------------------------------------------------
 
-log { source(s_pfsense_syslog); filter(f_drop_noise); flags(final); };
+# NOTE: every pfSense log path now reads a FILE syslogd writes — the socket
+# source s_pfsense_syslog was removed (see the source section above). The
+# per-log filters (f_dhcp/f_dns_all/f_vpn) still apply because the file
+# sources' program-override() sets $PROGRAM to a value those filters match
+# (dhcpd/unbound/openvpn/ipsec); auth routes by its own file, whole-file.
 
 log { source(s_filter_log); filter(f_firewall);
       rewrite(r_add_tag_firewall); rewrite(r_add_hostname); rewrite(r_add_tier); rewrite(r_add_version);
       destination(d_siem_tls); flags(flow-control); };
 
-log { source(s_pfsense_syslog); source(s_dhcpd); filter(f_dhcp);
+log { source(s_dhcpd); filter(f_dhcp);
       rewrite(r_add_tag_dhcp); rewrite(r_add_hostname); rewrite(r_add_tier); rewrite(r_add_version);
       destination(d_siem_tls); flags(flow-control); };
 
-log { source(s_pfsense_syslog); source(s_resolver); filter(f_dns_all);
+log { source(s_resolver); filter(f_dns_all);
       rewrite(r_add_tag_dns); rewrite(r_add_hostname); rewrite(r_add_tier); rewrite(r_add_version);
       destination(d_siem_tls); flags(flow-control); };
 
-log { source(s_pfsense_syslog); source(s_openvpn); source(s_ipsec); filter(f_vpn);
+log { source(s_openvpn); source(s_ipsec); filter(f_vpn);
       rewrite(r_add_tag_vpn); rewrite(r_add_hostname); rewrite(r_add_tier); rewrite(r_add_version);
       destination(d_siem_tls); flags(flow-control); };
 
-log { source(s_pfsense_syslog); filter(f_auth);
+# auth.log is entirely auth-facility (pfSense routes auth/authpriv there); the
+# s_auth file source tags every line program=pfsense-auth via program-override,
+# so route the whole source (no facility filter — facility is not parsed under
+# flags(no-parse), matching every other file source on this deployment).
+log { source(s_auth);
       rewrite(r_add_tag_auth); rewrite(r_add_hostname); rewrite(r_add_tier); rewrite(r_add_version);
       destination(d_siem_tls); flags(flow-control); };
 

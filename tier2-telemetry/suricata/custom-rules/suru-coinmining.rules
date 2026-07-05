@@ -1,0 +1,49 @@
+# SURU Custom Rules — Cryptomining (Stratum protocol) detection
+# MITRE ATT&CK: TA0040 Impact / T1496 Resource Hijacking
+#
+# SID block: 9990000–9999999 (SURU project-local range; never overlaps ET Open)
+#
+# Each rule MUST be on a single physical line — Suricata requires it.
+# Validation: suricata -T -S suru-coinmining.rules
+#
+# WHY A CUSTOM RULE (coverage complementarity):
+#  - The DNS side is already covered by pfBlockerNG's SURU_NoCoin DNSBL feed
+#    (docs/detection-coverage-map.md §1.3, T1496) — it blocks resolution of
+#    known mining-pool domains. This rule adds the DIRECT-IP / non-DNS path:
+#    a host that reaches a mining pool by hardcoded IP (no DNS to block) is
+#    caught here on the wire by its Stratum protocol handshake.
+#  [MISSING REFERENCE: current ET Open coinminer SID coverage not re-verified
+#   this session — emerging-malware/emerging-policy may carry some coinminer
+#   signatures. This rule targets the Stratum JSON-RPC method strings
+#   specifically, which is a precise, protocol-level signature independent of
+#   feed currency. Propose web search: "Emerging Threats coinminer stratum
+#   ruleset SID coverage 2026" to confirm/complement.]
+#
+# Stratum is the dominant mining-pool protocol: the miner opens a TCP session and
+# sends JSON-RPC `{"method":"mining.subscribe"...}` then `mining.authorize`.
+# Requiring BOTH method strings (vs either alone) keeps FP near-zero — these
+# literals do not co-occur in normal traffic.
+# FP note: a legitimate, operator-sanctioned miner will also match — allowlist
+# its source via the Suricata Pass List if intentional mining is permitted on
+# this network.
+#
+# WHY FLOWBITS (not a single rule with two content matches): mining.subscribe and
+# mining.authorize are SEPARATE JSON-RPC messages with server chatter
+# (mining.notify / set_difficulty / extranonce) between them, so on a real
+# session they routinely land in DIFFERENT stream-reassembly chunks. A single
+# rule with `content;content;distance:0` (or even two unordered contents in one
+# rule) evaluates relative/co-presence matching only WITHIN the current inspected
+# chunk, so it silently MISSES any session where the two literals straddle a
+# reassembly-chunk boundary (this router's stream.reassembly.toserver-chunk-size
+# is 2560 bytes — LIVE-TESTED false negative beyond that gap, 2026-07-05).
+# Flowbits are FLOW-scoped state that persists for the
+# life of the flow, independent of the chunk window: rule 1 sets a flowbit on
+# subscribe (and does not alert); rule 2 alerts on authorize only when that
+# flowbit is set. Live-tested to fire across split packets, reversed order, and a
+# 3000-byte gap. See docs/detection-coverage-map.md §1.2.
+
+# ── Rule 9990004 — Stratum leg 1: mining.subscribe (sets flowbit, does not alert) ──
+alert tcp $HOME_NET any -> $EXTERNAL_NET any (msg:"SURU Cryptomining - Stratum subscribe leg 1 (TA0040/T1496)"; flow:established,to_server; content:"mining.subscribe"; flowbits:set,suru.mining.subscribe; flowbits:noalert; classtype:policy-violation; sid:9990004; rev:2; metadata:tactic TA0040, technique T1496, affected_product Any, deployment Perimeter, falsepositives Operator_sanctioned_mining_allowlist_the_source;)
+
+# ── Rule 9990005 — Stratum leg 2: mining.authorize after a subscribe on the same flow (TA0040/T1496) ──
+alert tcp $HOME_NET any -> $EXTERNAL_NET any (msg:"SURU Cryptomining - Stratum mining-pool handshake (TA0040/T1496)"; flow:established,to_server; content:"mining.authorize"; flowbits:isset,suru.mining.subscribe; classtype:policy-violation; sid:9990005; rev:1; metadata:tactic TA0040, technique T1496, affected_product Any, deployment Perimeter, falsepositives Operator_sanctioned_mining_allowlist_the_source;)

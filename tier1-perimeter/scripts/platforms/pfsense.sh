@@ -1004,11 +1004,44 @@ EOPHP
   # config_set_path / write_config — the correct pfSense API for writing to
   # installedpackages/pfblockerngdnsbl/config. Merges by aliasname; preserves
   # any existing entries not managed by SURU.
+  #
+  # The SURU_AbuseIPDB feed row (ip-categories.yml) carries an
+  # @@ABUSEIPDB_API_KEY@@ token — same env-token convention as the syslog-ng
+  # template above. With ABUSEIPDB_API_KEY set, the key is substituted into
+  # the staged copy only (rendered/ stays secret-free). Unset or invalid, the
+  # token-bearing row is DELETED so pfBlockerNG never fetches a token-literal
+  # URL and verify-pfblockerng-feeds.sh (which derives its expectations from
+  # the live config.xml rows, with no state filter) stays green.
   local pf_importer_remote="${_PF_REMOTE_STAGING}/import-pfblockerng.php"
-  _pf_stage_and_install "${rendered}/${_PF_RENDERED_PFBLOCKER_PHP}" "${pf_importer_remote}"
+  local tmp_importer; tmp_importer="$(mktemp)"
+  local _pfb_abuseipdb_key="${ABUSEIPDB_API_KEY:-}"
+  if [[ -n "${_pfb_abuseipdb_key}" && ! "${_pfb_abuseipdb_key}" =~ ^[A-Za-z0-9]+$ ]]; then
+    echo "[pfsense] WARN: ABUSEIPDB_API_KEY contains non-alphanumeric characters — treating as unset (sed/URL injection guard)."
+    _pfb_abuseipdb_key=""
+  fi
+  if [[ -n "${_pfb_abuseipdb_key}" ]]; then
+    sed -e "s|@@ABUSEIPDB_API_KEY@@|${_pfb_abuseipdb_key}|g" \
+      < "${rendered}/${_PF_RENDERED_PFBLOCKER_PHP}" > "${tmp_importer}"
+    echo "[pfsense] pfBlockerNG: AbuseIPDB API key injected into staged importer (SURU_AbuseIPDB active)."
+  else
+    sed -e "/@@ABUSEIPDB_API_KEY@@/d" \
+      < "${rendered}/${_PF_RENDERED_PFBLOCKER_PHP}" > "${tmp_importer}"
+    echo "[pfsense] ABUSEIPDB_API_KEY unset — SURU_AbuseIPDB feed row omitted from import (set it in tier1-perimeter/.env to activate)."
+  fi
+  _pf_stage_and_install "${tmp_importer}" "${pf_importer_remote}"
+  rm -f -- "${tmp_importer}"
   local _PBSUDO=""
   [[ "${ssh_user}" != "root" ]] && _PBSUDO="sudo "
+  # When the staged importer carries a substituted API key, tighten its mode
+  # before running it and shred it immediately after (chmod 600 + rm -f) — the
+  # key must not linger in the world-writable staging dir.
+  if [[ -n "${_pfb_abuseipdb_key}" && "${dry_run}" != "true" ]]; then
+    _pf_remote_exec "${_PBSUDO}chmod 600 '${pf_importer_remote}'"
+  fi
   _pf_remote_exec "${_PBSUDO}php ${pf_importer_remote}"
+  if [[ -n "${_pfb_abuseipdb_key}" && "${dry_run}" != "true" ]]; then
+    _pf_remote_exec "${_PBSUDO}rm -f '${pf_importer_remote}'"
+  fi
   trap - EXIT
   # Deploy succeeded — disarm the auto-revert trap so a failure in the
   # purely-informational verify/validate blocks below doesn't roll us back.

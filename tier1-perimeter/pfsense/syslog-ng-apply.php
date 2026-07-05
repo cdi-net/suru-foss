@@ -140,7 +140,16 @@ const SURU_SYNTHETIC_NAME_RE = '/^(log|options)_suru_[0-9a-f]+$/';
 //     string "t_json_base" (syslog-ng does not forward-resolve template refs) —
 //     shipping 11 bytes of constant text instead of JSON and breaking all SIEM
 //     ingestion (incident 2026-06-23). Pruning removes the now-inert leftover.
-const SURU_LEGACY_OWNED_NAMES = ['t_json_base'];
+//   - s_pfsense_syslog: removed 2026-07-05. This unix-dgram("/var/run/log")
+//     source made syslog-ng compete with pfSense's syslogd for the syslog
+//     socket; syslog-ng won after a 2026-06-30 config regen and starved
+//     syslogd, freezing /var/log/filter.log so firewall block events stopped
+//     reaching the SIEM for 5 days. WITHOUT this prune entry the template's
+//     deletion of the source is inert — the applier merges by name and would
+//     preserve the orphaned source, which still binds the socket even with no
+//     log{} path consuming it (a declared source is opened at startup). Pruning
+//     it is what actually removes the competing bind.
+const SURU_LEGACY_OWNED_NAMES = ['t_json_base', 's_pfsense_syslog'];
 
 // Object types that can be the TARGET of a reference (source(NAME),
 // destination(NAME), filter(NAME), rewrite(NAME), parser(NAME),
@@ -443,5 +452,38 @@ if (count($cron_items) !== $cron_items_before) {
 }
 @unlink($sng_boot_sh);
 @unlink($sng_rendered);
+
+// --- Hand /var/run/log back to pfSense's syslogd (2026-07-05) ----------------
+// syslog-ng and syslogd both want the /var/run/log datagram socket. syslog-ng
+// unlink()s-and-rebinds it on every start, so it wins whenever it restarts
+// last — which is exactly what the syslogng_resync() above just did. Now that
+// syslog-ng's config no longer declares the /var/run/log source (s_pfsense_syslog
+// was removed + pruned), restart syslogd so it reclaims the socket: pfSense's
+// filterlog/kea/unbound/etc. reconnect to syslogd, which resumes writing
+// /var/log/{filter,auth,resolver,...}.log — the FILES syslog-ng reads. Without
+// this step the socket is left orphaned (syslog-ng released it, nothing rebinds)
+// until the next reboot, and firewall block events never reach the SIEM.
+// system_syslogd_start() is pfSense's own (re)start path — the same one boot and
+// the GUI log-settings save use — so deploy and boot behavior stay identical.
+if (function_exists('system_syslogd_start')) {
+    echo "[syslog-ng-apply] Restarting pfSense syslogd so it reclaims /var/run/log..." . PHP_EOL;
+    system_syslogd_start();
+    // Confirm syslogd is the socket owner now (best-effort, non-fatal).
+    // system_syslogd_start() launches syslogd asynchronously, so it may not have
+    // bound the socket the instant it returns — retry the check a few times
+    // rather than reporting a spurious WARN on a slow bind.
+    $owned_by_syslogd = false;
+    for ($i = 0; $i < 5 && !$owned_by_syslogd; $i++) {
+        if ($i > 0) { sleep(1); }
+        $sock_out = [];
+        @exec('sockstat 2>/dev/null | grep " /var/run/log "', $sock_out);
+        foreach ($sock_out as $l) { if (strpos($l, 'syslogd') !== false) { $owned_by_syslogd = true; break; } }
+    }
+    echo $owned_by_syslogd
+        ? "[syslog-ng-apply] OK — syslogd owns /var/run/log." . PHP_EOL
+        : "[syslog-ng-apply] WARN — could not confirm syslogd owns /var/run/log after 5s; verify filter.log resumes." . PHP_EOL;
+} else {
+    echo "[syslog-ng-apply] WARN — system_syslogd_start() unavailable; syslogd not restarted (verify /var/run/log ownership)." . PHP_EOL;
+}
 
 echo "[syslog-ng-apply] Done." . PHP_EOL;

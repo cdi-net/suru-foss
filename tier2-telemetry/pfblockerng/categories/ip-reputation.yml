@@ -23,4 +23,8 @@ feeds:
     priority: 5
     desc: "AbuseIPDB high-confidence IPs (requires API key)"
     mitre: [T1071, T1110]
-    note: "Enable and configure API key before activating"
+    note: "SUPERSEDED — the live entry is the SURU_AbuseIPDB feed row inside
+      SURU_IP_REP in ip-categories.yml (this file has no render path;
+      render-pfblockerng.sh consumes only dnsbl-categories.yml and
+      ip-categories.yml). Kept for historical reference only — do not edit this
+      entry to activate the feed; set ABUSEIPDB_API_KEY in tier1-perimeter/.env."
