@@ -334,6 +334,32 @@ docker exec suru.t3.datalake.opensearch \
   curl -sk -u admin:$PASS "https://localhost:9200/_cluster/settings?pretty&flat_settings=true"
 ```
 
+### Cluster color — green is the expected steady state (single-node)
+
+This is a single-node cluster (`discovery.type: single-node`): a replica shard
+can never allocate alongside its own primary, so any index born with
+`number_of_replicas > 0` leaves the cluster **permanently yellow**. Green is
+enforced at three layers:
+
+| Layer | Mechanism | Covers |
+|-------|-----------|--------|
+| `suru-ecs-template.json` (`number_of_replicas: 0`) | template at index creation | all `suru-*` data indices |
+| `opensearch.yml` `plugins.index_state_management.history.number_of_replicas: 0` | plugin setting at node start | ISM's daily-rolling `.opendistro-ism-managed-index-history-*` (the largest recurring source) |
+| `deploy.sh normalize_system_index_replicas()` (`auto_expand_replicas 0-1`, idempotent, every datalake start + `repair` step 4/7) | per-index setting after the fact | everything plugins create with no replica setting of their own: Security Analytics `.opensearch-sap-*` alert/finding indices, `.opendistro-alerting-config`, `.opensearch-alerting-config-lock` |
+
+`auto_expand_replicas: 0-1` self-shrinks to 0 replicas on one node and grows a
+replica automatically if a second node ever joins — the same mechanism the
+security plugin uses for `.opendistro_security`. A yellow cluster is therefore
+a *finding*, not an expected state: list the culprits with
+
+```bash
+docker exec suru.t3.datalake.opensearch \
+  curl -sk -u admin:$PASS "https://localhost:9200/_cat/indices?v&health=yellow&expand_wildcards=all"
+```
+
+(`expand_wildcards=all` is required — the plugin indices are hidden and
+invisible to a plain `_cat/indices`.)
+
 ---
 
 ## Disk Watermark Recovery

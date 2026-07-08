@@ -589,6 +589,38 @@ ensure_network_clean() {
 #            No functional difference from the default "gated" mode anymore —
 #            the function is unconditionally probe-driven in both modes; the
 #            arg is retained so call sites stay self-documenting.
+# ── Single-node system-index replica normalization ────────────────────────────
+# On this single-node cluster (discovery.type: single-node) a replica shard can
+# never allocate alongside its own primary, so any plugin-created index born
+# with replicas > 0 (SA .opensearch-sap-*, alerting config/history, ISM
+# bookkeeping) leaves the cluster permanently yellow. suru-* is covered by the
+# ECS template (replicas 0) and ISM history by opensearch.yml
+# (plugins.index_state_management.history.number_of_replicas: 0) — this handles
+# everything else the plugins create with no replica-count setting of their
+# own. auto_expand_replicas 0-1 self-shrinks to 0 replicas on one node and
+# grows back automatically if a node ever joins (same mechanism the security
+# plugin uses for .opendistro_security). Idempotent: re-PUTting the same value
+# is a no-op; best-effort: a failure here must never abort a start.
+normalize_system_index_replicas() {
+  if ! docker inspect suru.t3.datalake.opensearch >/dev/null 2>&1; then
+    return 0
+  fi
+  if $DRY_RUN; then
+    log INFO "[DRY-RUN] Would apply auto_expand_replicas 0-1 to plugin system indices (single-node green)"
+    return 0
+  fi
+  log INFO "Normalizing plugin system-index replicas (single-node: auto_expand_replicas 0-1)..."
+  if docker exec suru.t3.datalake.opensearch sh -c \
+    'curl -sk -u "admin:$OPENSEARCH_INITIAL_ADMIN_PASSWORD" -X PUT \
+      "https://localhost:9200/.opendistro-ism-*,.opensearch-sap-*,.opendistro-alerting-*,.opensearch-alerting-*/_settings?expand_wildcards=all&ignore_unavailable=true" \
+      -H "Content-Type: application/json" \
+      -d "{\"index\":{\"auto_expand_replicas\":\"0-1\"}}"' | grep -q '"acknowledged":true'; then
+    log OK "System-index replicas normalized"
+  else
+    log WARN "System-index replica normalization not acknowledged — cluster may stay yellow (harmless); inspect with: _cat/indices?health=yellow&expand_wildcards=all"
+  fi
+}
+
 repair_security_credentials_if_needed() {
   local mode="${1:-gated}"
 
@@ -814,6 +846,9 @@ cmd_start() {
         else
           log INFO "OpenSearch unchanged — skipping template-init and ism-policy-init"
         fi
+        # Run every start (idempotent, best-effort) — plugins create new
+        # bookkeeping indices on their own cadence; see the function header.
+        normalize_system_index_replicas || true
         wait_healthy "suru.t3.datalake.dashboards" 180
         # Re-import dashboards only when the Dashboards container was recreated or created
         # fresh. Running the importer unconditionally on every start would silently
@@ -1148,22 +1183,25 @@ cmd_repair() {
   log STEP "Tier 3 — Recovery: security re-sync, templates/policies, dashboards verification"
   load_env
 
-  log INFO "Step 1/6 — Re-sync security index if admin credentials are missing or have drifted"
+  log INFO "Step 1/7 — Re-sync security index if admin credentials are missing or have drifted"
   repair_security_credentials_if_needed "force"
 
-  log INFO "Step 2/6 — Re-apply OpenSearch index templates"
+  log INFO "Step 2/7 — Re-apply OpenSearch index templates"
   run_init "datalake/opensearch" "suru.t3.datalake.template-init" "init"
 
-  log INFO "Step 3/6 — Re-apply ISM retention policies"
+  log INFO "Step 3/7 — Re-apply ISM retention policies"
   run_init "datalake/opensearch" "suru.t3.datalake.ism-policy-init" "init"
 
-  log INFO "Step 4/6 — Wait for Dashboards to report healthy"
+  log INFO "Step 4/7 — Normalize plugin system-index replicas (single-node green)"
+  normalize_system_index_replicas || true
+
+  log INFO "Step 5/7 — Wait for Dashboards to report healthy"
   wait_healthy "suru.t3.datalake.dashboards" 180
 
-  log INFO "Step 5/6 — Re-run the dashboard importer"
+  log INFO "Step 6/7 — Re-run the dashboard importer"
   run_init "datalake/opensearch" "suru.t3.datalake.dashboard-importer" "init"
 
-  log INFO "Step 6/6 — Verify dashboards are actually imported"
+  log INFO "Step 7/7 — Verify dashboards are actually imported"
   assert_dashboards_imported "datalake/opensearch"
 
   log OK "Repair complete"
