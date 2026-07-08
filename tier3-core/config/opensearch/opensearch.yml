@@ -46,3 +46,16 @@ plugins.security.authcz.admin_dn:
   - "CN=admin,OU=SURU,O=SURU Platform,C=RO"
 plugins.security.nodes_dn:
   - "CN=suru-t3-datalake-opensearch,OU=SURU,O=SURU Platform,C=RO"
+
+# ── Single-node replica policy (system/plugin indices) ────────────────────────
+# This is a single-node cluster (discovery.type: single-node in compose.yaml):
+# a replica can never allocate alongside its own primary, so any index born
+# with replicas > 0 leaves the cluster permanently yellow. suru-* indices are
+# covered by suru-ecs-template.json (number_of_replicas: 0); the ISM plugin's
+# daily-rolling history indices default to 1 replica and are the largest
+# recurring yellow source. Born-green at the source:
+plugins.index_state_management.history.number_of_replicas: 0
+# Other plugin-created indices (Security Analytics .opensearch-sap-*, alerting
+# config/history) expose no equivalent setting — deploy.sh's
+# normalize_system_index_replicas() applies auto_expand_replicas 0-1 to them
+# idempotently on every datalake start/repair instead.
