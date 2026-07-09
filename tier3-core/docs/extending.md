@@ -108,9 +108,13 @@ through to dead letter.
 After creating the pipeline file:
 
 ```bash
-# Syntax check
-docker exec logstash logstash --config.test_and_exit \
-  -f /etc/logstash/pipelines/NN-<source-slug>.conf
+# Syntax check — ⚠️ NOT via `docker exec` into the live container: a 2nd JVM in
+# its cgroup can OOM-crash production ingestion. Use a throwaway container (own
+# cgroup); full command in config/logstash-pfsense/pipelines/README.md:
+docker run --rm -e LS_JAVA_OPTS='-Xmx256m' \
+  -e OPENSEARCH_HOST=x -e OPENSEARCH_PORT=9200 -e OPENSEARCH_USER=x -e OPENSEARCH_PASSWORD=x \
+  -v "$PWD/NN-<source-slug>.conf":/tmp/p.conf:ro \
+  docker.elastic.co/logstash/logstash-oss:9.3.1 logstash --config.test_and_exit -f /tmp/p.conf
 
 # Live reload (if pipeline.reload.automatic is enabled)
 # Or restart: docker compose restart logstash
