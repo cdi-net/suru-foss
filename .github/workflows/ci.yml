@@ -239,11 +239,16 @@ jobs:
       # Two tiers:
       #   • BLOCKING — packs that are GREEN on the current repo, so any NEW finding
       #     deterministically fails the job: p/secrets (0), p/terraform (0),
-      #     p/command-injection (0). Highest-value must-never-regress classes.
+      #     p/command-injection (0), p/dockerfile (0). Highest-value
+      #     must-never-regress classes. p/dockerfile was promoted from
+      #     informational once every Dockerfile carried a USER instruction — it now
+      #     guards the whole repo against a Dockerfile-without-USER regression.
       #   • INFORMATIONAL — packs with pre-existing findings surfaced in the log but
-      #     not yet blocking: p/dockerfile (2: content-sync Dockerfile USER is fixed
-      #     in a separate PR; mdns Dockerfile USER is a tracked follow-up) and
-      #     p/security-audit (11). Promote these to the blocking tier once triaged.
+      #     not blocking: p/security-audit (11 — all accepted frontdoor-nginx
+      #     architecture patterns: `dynamic-proxy-host` is the deliberate runtime
+      #     resolver so a down backend doesn't crash nginx at startup, and
+      #     `missing-internal` flags intentionally-reachable authed proxy locations,
+      #     not internal-only ones). Promote to blocking only if driven to zero.
       - name: semgrep — SAST (blocking, tokenless)
         run: |
           docker run --rm -v "$PWD:/src" -w /src \
@@ -251,15 +256,15 @@ jobs:
             semgrep scan --error --metrics=off \
               --config p/secrets \
               --config p/terraform \
-              --config p/command-injection
+              --config p/command-injection \
+              --config p/dockerfile
 
       - name: semgrep — broader SAST (informational, non-blocking)
         if: always()
         run: |
-          # Surfaces pre-existing p/dockerfile + p/security-audit findings without
-          # gating. `|| true` guarantees this step never blocks CI (SEC-084).
+          # Surfaces pre-existing p/security-audit findings without gating.
+          # `|| true` guarantees this step never blocks CI (SEC-084).
           docker run --rm -v "$PWD:/src" -w /src \
             semgrep/semgrep@sha256:7b625711ba9b6d1a543e308967b18c01b59932490a5536a06422666474bf6ee4 \
             semgrep scan --metrics=off \
-              --config p/dockerfile \
               --config p/security-audit || true

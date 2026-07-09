@@ -26,8 +26,16 @@ Recommended pipeline mount target:
 
 ## Validation
 
+⚠️ **Never run this inside the LIVE container** (`docker exec suru.t3.ingestion.logstash-pfsense …`)
+— a second JVM in its cgroup can OOM-crash production ingestion. Validate in a
+throwaway container instead (own cgroup); the full command is in
+[`pipelines/README.md`](pipelines/README.md) ("Validating a pipeline (safely)"):
+
 ```bash
-/usr/share/logstash/bin/logstash --path.settings /usr/share/logstash/config --config.test_and_exit
+docker run --rm -e LS_JAVA_OPTS='-Xmx256m' \
+  -e OPENSEARCH_HOST=x -e OPENSEARCH_PORT=9200 -e OPENSEARCH_USER=x -e OPENSEARCH_PASSWORD=x \
+  -v "$PWD/<file>.conf":/tmp/p.conf:ro \
+  docker.elastic.co/logstash/logstash-oss:9.3.1 logstash --config.test_and_exit -f /tmp/p.conf
 ```
 
 ## Notes

@@ -228,7 +228,7 @@ services:
   # (the entrypoint then runs the geoip pipeline in passthrough mode). Re-run to
   # refresh: docker compose run --rm suru.t3.ingestion.geoipupdate
   suru.t3.ingestion.geoipupdate:
-    image: ghcr.io/maxmind/geoipupdate:v7.1.1
+    image: ghcr.io/maxmind/geoipupdate:v7.1.1@sha256:faecdca22579730ab0b7dea5aa9af350bb3c93cb9d39845c173639ead30346d2
     container_name: suru.t3.ingestion.geoipupdate
     platform: ${DOCKER_PLATFORM:-linux/amd64}
     restart: "no"

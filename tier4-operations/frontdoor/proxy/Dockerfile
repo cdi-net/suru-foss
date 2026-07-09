@@ -20,3 +20,11 @@ FROM nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef
 # to build /etc/nginx/auth/htpasswd for the frontdoor's HTTP Basic auth.
 RUN apk add --no-cache apache2-utils \
  && rm -rf /var/cache/apk/*
+
+# Run non-root by default at the IMAGE level (defense-in-depth; Trivy DS-0002).
+# uid/gid 101 is the `nginx` user shipped by the base image and already used by the
+# compose service (`user: "101:101"`). The compose override remains authoritative;
+# this makes a bare `docker run suru-t4-frontdoor-proxy:local` non-root too, so the
+# image is hardened even without the compose layer. Numeric form keeps the check
+# unambiguous (no passwd name resolution) and matches compose exactly.
+USER 101:101

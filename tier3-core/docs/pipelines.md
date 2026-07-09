@@ -218,4 +218,6 @@ Short version:
 4. Map all fields to ECS v8 (see `architecture.md` for mandatory fields)
 5. Annotate MITRE ATT&CK tactics/techniques as code comments
 6. Add entry to this file (`pipelines.md`) under **Pipeline Detail**
-7. Validate: `docker exec logstash logstash --config.test_and_exit -f /etc/logstash/pipelines/NN-<source>.conf`
+7. Validate — ⚠️ **not** by `docker exec` into the live container (a 2nd JVM in its
+   cgroup can OOM-crash production ingestion); use a throwaway container:
+   `docker run --rm -e LS_JAVA_OPTS='-Xmx256m' -e OPENSEARCH_HOST=x -e OPENSEARCH_PORT=9200 -e OPENSEARCH_USER=x -e OPENSEARCH_PASSWORD=x -v "$PWD/NN-<source>.conf":/tmp/p.conf:ro docker.elastic.co/logstash/logstash-oss:9.3.1 logstash --config.test_and_exit -f /tmp/p.conf` (full command: `../config/logstash-pfsense/pipelines/README.md`)
