@@ -164,6 +164,7 @@ platform's dashboards and detection rules depend on:
 |-------|------|------------|-------|
 | `in_iface` | `keyword` | `ignore_above: 1024`, **no `.keyword` sub-field** | Use bare `in_iface` in KQL and aggregations. `in_iface.keyword` does not exist and will silently return no results. |
 | `network.application` | `keyword` | — | Suricata detected application/service protocol (renamed from the raw `service` field). |
+| `network.iana_number` | `keyword` | — | Numeric IANA protocol id as a string (e.g. `"6"`). Set by pfBlockerNG for every protocol; carries protocol identity for pure-IP protocols with no `network.transport` name. |
 | `dns.rrname` | `keyword` | — | DNS query name (Suricata EVE). |
 | `dns.rrtype` | `keyword` | — | DNS record type. |
 | `dns.question.name` | `keyword` | — | DNS query name (pfBlockerNG). |

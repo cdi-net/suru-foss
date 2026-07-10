@@ -46,7 +46,7 @@ Logstash pipeline (separate JVM thread pool).
 | `event.category` | `["network"]` |
 | `event.type` | `["connection", "allowed"]` or `["connection", "denied"]` |
 | `event.module` | `pfsense` |
-| `network.transport` | TCP / UDP / ICMP |
+| `network.transport` | `tcp` / `udp` / `icmp` (lowercase L4 name per ECS) |
 | `network.protocol` | Derived from dst port (best-effort) |
 | `source.ip` | PF src IP |
 | `source.port` | PF src port |
@@ -93,7 +93,7 @@ Logstash pipeline (separate JVM thread pool).
 | `source.port` | `src_port` |
 | `destination.ip` | `dest_ip` |
 | `destination.port` | `dest_port` |
-| `network.transport` | `proto` |
+| `network.transport` | `proto` (lowercased — Suricata EVE emits `TCP`/`UDP`) |
 | `threat.technique.id` | `alert.metadata.mitre_technique_id` |
 | `threat.tactic.id` | `alert.metadata.mitre_tactic_id` |
 
@@ -164,7 +164,9 @@ Two event formats are parsed — DNSBL (DNS blocklist hits) and IP reputation bl
 | `source.ip` | Requesting client IP | Blocked source IP |
 | `destination.ip` | — | Destination IP |
 | `destination.port` | — | Destination port |
-| `network.transport` | — | Protocol (TCP/UDP) |
+| `network.transport` | — | Lowercase L4 name (`tcp`/`udp`/`icmp`/`gre`/…) resolved from the IANA protocol; unset for protocols outside the name dictionary |
+| `network.iana_number` | — | Numeric IANA protocol id as a string (e.g. `"6"`, `"47"`) — always set; the fallback carrier when no `network.transport` name exists |
+| `network.direction` | — | `ingress` / `egress` (pf interface-relative `in`/`out` normalised to the ECS enum) |
 | `observer.type` | `firewall` | `firewall` |
 | `suru.tier` | `tier1` | `tier1` |
 
