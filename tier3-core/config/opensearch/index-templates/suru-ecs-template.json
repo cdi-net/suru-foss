@@ -120,6 +120,7 @@ PUT /_index_template/suru-ecs-template
         "network": {
           "properties": {
             "transport":   { "type": "keyword" },
+            "iana_number": { "type": "keyword" },
             "direction":   { "type": "keyword" },
             "protocol":    { "type": "keyword" },
             "application": { "type": "keyword" },
