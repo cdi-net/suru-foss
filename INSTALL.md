@@ -26,7 +26,7 @@ configured last because it ships logs *into* the already-running core.
 Clone the repository on the core host:
 
 ```bash
-git clone https://github.com/cybrd0ne/suru-foss.git
+git clone https://github.com/cdi-net/suru-foss.git
 cd suru-foss
 ```
 

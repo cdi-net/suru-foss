@@ -8,7 +8,7 @@ containers no longer bind host ports of their own.
 
 ```
                                                            ┌── static landing (/) ◀── suru.t4.frontdoor.content
-                                                           │                          (git-sync of cybrd0ne/suru-frontdoor-content)
+                                                           │                          (git-sync of cdi-net/suru-frontdoor-content)
 pfSense syslog-ng ──TCP+TLS:443 (SNI=syslog.suru.local)──┐│
                                                            ││  suru.t4.frontdoor.proxy
 LAN client ──HTTPS:443──────────────────────────────────┐  │   (nginx 1.27-alpine,    │── suru-t3-datalake-dashboards:5601 (/dashboards/)
@@ -62,7 +62,7 @@ next `deploy.sh register-dns` run will pick them up automatically.
 - **Static content (`/`):** served by nginx directly from a shared
   `suru-t4-frontdoor-content` volume, populated by the
   `suru.t4.frontdoor.content` sidecar (git-sync of the
-  [cybrd0ne/suru-frontdoor-content](https://github.com/cybrd0ne/suru-frontdoor-content)
+  [cdi-net/suru-frontdoor-content](https://github.com/cdi-net/suru-frontdoor-content)
   repository). The sidecar uses a fine-grained PAT scoped to that repo
   with **Contents: read-only** — write access stays with content authors,
   not with the platform. Content authoring conventions live in the
@@ -84,7 +84,7 @@ One-time, per host:
    FRONTDOOR_BASIC_AUTH_USER=admin
    FRONTDOOR_BASIC_AUTH_PASSWORD=<strong-password>
 
-   CONTENT_REPO_URL=https://github.com/cybrd0ne/suru-frontdoor-content.git
+   CONTENT_REPO_URL=https://github.com/cdi-net/suru-frontdoor-content.git
    CONTENT_REPO_REF=main
    CONTENT_REPO_TOKEN=<github fine-grained PAT — contents: read on the content repo>
    CONTENT_SYNC_PERIOD=60s
@@ -125,7 +125,7 @@ bash tier4-operations/scripts/deploy.sh check
 ## Update the static landing page (or future docs)
 
 The landing page at `/` is **not** authored in this repo. Push commits
-to [cybrd0ne/suru-frontdoor-content][content]; the `suru.t4.frontdoor.content`
+to [cdi-net/suru-frontdoor-content][content]; the `suru.t4.frontdoor.content`
 sidecar picks them up within `CONTENT_SYNC_PERIOD` (default 60s).
 That repository has its own documentation describing the
 authoring conventions.
@@ -137,7 +137,7 @@ docker logs --tail 20 suru.t4.frontdoor.content
 docker restart suru.t4.frontdoor.content
 ```
 
-[content]: https://github.com/cybrd0ne/suru-frontdoor-content
+[content]: https://github.com/cdi-net/suru-frontdoor-content
 
 ## Add a new route
 

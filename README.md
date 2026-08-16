@@ -3,7 +3,7 @@
 **Self-hosted, modular cybersecurity platform for small offices and home labs (SOHO).**
 Detection and response — not alert spam.
 
-[![CI](https://github.com/cybrd0ne/suru-foss/actions/workflows/ci.yml/badge.svg)](https://github.com/cybrd0ne/suru-foss/actions/workflows/ci.yml)
+[![CI](https://github.com/cdi-net/suru-foss/actions/workflows/ci.yml/badge.svg)](https://github.com/cdi-net/suru-foss/actions/workflows/ci.yml)
 [![License: MPL 2.0](https://img.shields.io/badge/License-MPL%202.0-brightgreen.svg)](./LICENSE)
 
 > This is **suru-foss**, the open-source edition of the SURU platform, released

@@ -27,7 +27,7 @@ monitoring and frontdoor subsystems below are the first components of:
 | Subdir | Purpose | Status |
 |--------|---------|--------|
 | `monitoring/` | Prometheus / Grafana / Alertmanager stack | Migrated from `tier3-core/monitoring/` |
-| `frontdoor/proxy/` | Single LAN entry point: nginx reverse proxy + stream LB + mDNS sidecar + git-sync sidecar serving the [suru-frontdoor-content](https://github.com/cybrd0ne/suru-frontdoor-content) repo at `/` | Implemented |
+| `frontdoor/proxy/` | Single LAN entry point: nginx reverse proxy + stream LB + mDNS sidecar + git-sync sidecar serving the [suru-frontdoor-content](https://github.com/cdi-net/suru-frontdoor-content) repo at `/` | Implemented |
 | `scripts/` | Orchestrator (`deploy.sh`), DNS registrar (`register-dns.sh`), legacy cleanup | Implemented |
 
 The remaining services (orchestrator, integration manager, content manager,
