@@ -13,6 +13,21 @@
 # where domain content is silently never fetched/compiled. Live-confirmed on
 # the router 2026-06-23: every alias here previously shipped with
 # action="Deny Both" and had ZERO files in /var/db/pfblockerng/dnsblorig/.
+#
+# `blocking` (optional, per feed) selects pfBlockerNG's per-group
+# Logging/Blocking Mode (pfblockerng_dnsbl.php):
+#   null_log  -> 'disabled_log'  Null Block: 0.0.0.0 + logging   (DEFAULT)
+#   null      -> 'disabled'      Null Block: 0.0.0.0, no logging
+#   vip       -> 'enabled'       Blocked Webpage/VIP
+# Omit the key: the render default is null_log — a block must fail closed
+# AND fast, never a black hole. `vip` is opt-in only and requires the DNSBL
+# VIP to be TCP-reachable from client LANs; verify-pfblockerng-feeds.sh's
+# no-blackhole probe enforces this. Incident evidence (live repro
+# 2026-08-21): with VIP mode, a LAN firewall policy that drops
+# client->firewall(self) traffic black-holes every blocked HTTPS fetch for
+# the browser's full connect timeout (~75s) — pages depending on blocked
+# CMP/tag CDNs take minutes to render while a curl of the origin returns
+# 200. Null-block replies fail in milliseconds instead.
 ---
 # NOTE: this `global:` block is documentation only — render-pfblockerng.sh
 # reads only `.feeds[]` from this file. The actual enforcement-mode setting
@@ -22,6 +37,9 @@
 # a different, heavier zone-file-based mode that does not pair with
 # pfb_py_block — see that file's comment for the live incident this
 # documents). Keep this block's `dnsbl_mode` value in sync for readability.
+# The DNSBL VIP fields (pfb_dnsvip etc.) are deliberately NOT managed by
+# SURU — under the null_log default no client traffic is ever steered at
+# the VIP, so whatever value an install carries is inert.
 global:
   dnsbl_mode: dnsbl_python
   blocking_ip: "0.0.0.0"
@@ -59,6 +77,16 @@ feeds:
     desc: "OpenPhish community phishing feed — replaces SURU_PhishTank: data.phishtank.com now returns 403 (PhishTank discontinued the unauthenticated public feed)"
     mitre: [T1566]
 
+  - aliasname: SURU_Phishing
+    action: "unbound"
+    url: "https://phishing.army/download/phishing_army_blocklist_extended.txt"
+    format: Domain
+    state: Enabled
+    update: Daily
+    priority: 5
+    desc: "Phishing Army extended blocklist (CC BY-NC 4.0) — replaces the retired ISC SANS suspiciousdomains feeds (URL 404s; feed dead since ~2020). Verified live 2026-08-30: HTTP 200, same-day update, 158,367 domains"
+    mitre: [T1566]
+
   - aliasname: SURU_Disconnect_Tracking
     action: "unbound"
     url: "https://s3.amazonaws.com/lists.disconnect.me/simple_tracking.txt"
@@ -69,15 +97,11 @@ feeds:
     desc: "Disconnect.me tracking domains"
     mitre: []
 
-  - aliasname: SURU_Disconnect_Malware
-    action: "unbound"
-    url: "https://s3.amazonaws.com/lists.disconnect.me/simple_malware.txt"
-    format: Domain
-    state: Enabled
-    update: Weekly
-    priority: 3
-    desc: "Disconnect.me malware-serving domains"
-    mitre: [T1071.004, T1588]
+  # SURU_Disconnect_Malware removed 2026-08-30 (feed audit): the feed is an
+  # empty husk — simple_malware.txt is 110 bytes containing exactly ONE
+  # domain, Disconnect's own test record malware-check.disconnect.me
+  # (fetched live). Zero detection value; the importer's merge-by-aliasname
+  # prune removes the alias from deployed routers on the next deploy.
 
   - aliasname: SURU_MVPS
     action: "unbound"

@@ -109,19 +109,21 @@ _generate_php_importer() {
 
   i=0
   while [[ ${i} -lt ${count} ]]; do
-    local aliasname action url format state
+    local aliasname action url format state blocking
     if command -v yq > /dev/null 2>&1; then
       aliasname="$( _yq_field "${yml}" ".feeds[${i}].aliasname" )"
       action="$(    _yq_field "${yml}" ".feeds[${i}].action"    )"
       url="$(       _yq_field "${yml}" ".feeds[${i}].url"       )"
       format="$(    _yq_field "${yml}" ".feeds[${i}].format"    )"
       state="$(     _yq_field "${yml}" ".feeds[${i}].state"     )"
+      blocking="$(  _yq_field "${yml}" ".feeds[${i}].blocking"  )"
     else
       aliasname="$( _yaml_get_feed_field "${yml}" ${i} aliasname || true )"
       action="$(    _yaml_get_feed_field "${yml}" ${i} action    || true )"
       url="$(       _yaml_get_feed_field "${yml}" ${i} url       || true )"
       format="$(    _yaml_get_feed_field "${yml}" ${i} format    || true )"
       state="$(     _yaml_get_feed_field "${yml}" ${i} state     || true )"
+      blocking="$(  _yaml_get_feed_field "${yml}" ${i} blocking  || true )"
     fi
     [[ -z "${aliasname}" ]] && aliasname="FEED_${i}"
     # DNSBL alias action MUST be "unbound" — pfBlockerNG's cron list-builder
@@ -133,14 +135,33 @@ _generate_php_importer() {
     [[ -z "${action}" ]]    && action="unbound"
     [[ -z "${format}" ]]    && format="Domain"
     [[ -z "${state}" ]]     && state="Enabled"
+    # Per-feed `blocking` -> pfBlockerNG per-group Logging/Blocking Mode
+    # (pfblockerng_dnsbl.php). Default is Null Block (logging): blocked
+    # domains answer 0.0.0.0 and clients fail in milliseconds — a block must
+    # fail closed AND fast, never a black hole. 'vip' (Blocked Webpage/VIP)
+    # is opt-in only and requires the VIP to be TCP-reachable from client
+    # LANs (verify-pfblockerng-feeds.sh probes it). See the
+    # dnsbl-categories.yml header for the incident evidence behind this rule.
+    [[ -z "${blocking}" ]]  && blocking="null_log"
+    local logging_mode
+    case "${blocking}" in
+      null_log) logging_mode="disabled_log" ;;
+      null)     logging_mode="disabled"     ;;
+      vip)      logging_mode="enabled"      ;;
+      *)
+        printf '[render-pfblockerng] ERROR: feed %s has invalid blocking: %s (valid: null_log | null | vip)\n' \
+          "${aliasname}" "${blocking}" >&2
+        exit 1
+        ;;
+    esac
     # Escape every field for safe embedding in PHP single-quoted strings (see _php_esc).
     local alias_esc; alias_esc="$(_php_esc "${aliasname}")"
     local action_esc; action_esc="$(_php_esc "${action}")"
     local url_esc; url_esc="$(_php_esc "${url}")"
     local fmt_esc; fmt_esc="$(_php_esc "${format}")"
     local state_esc; state_esc="$(_php_esc "${state}")"
-    printf "\$dnsbl_feeds[] = ['aliasname'=>'%s','action'=>'%s','logging'=>'enabled','row'=>[['header'=>'%s','url'=>'%s','format'=>'%s','state'=>'%s']]];\n" \
-      "${alias_esc}" "${action_esc}" "${alias_esc}" "${url_esc}" "${fmt_esc}" "${state_esc}"
+    printf "\$dnsbl_feeds[] = ['aliasname'=>'%s','action'=>'%s','logging'=>'%s','row'=>[['header'=>'%s','url'=>'%s','format'=>'%s','state'=>'%s']]];\n" \
+      "${alias_esc}" "${action_esc}" "${logging_mode}" "${alias_esc}" "${url_esc}" "${fmt_esc}" "${state_esc}"
     i=$(( i + 1 ))
   done
 
@@ -168,7 +189,7 @@ _generate_php_importer() {
     'write_config("SURU: imported pfBlockerNG DNSBL feeds");' \
     '$dnsbl_written = config_get_path("installedpackages/pfblockerngdnsbl/config", []);' \
     'echo "[pfblockerng] Wrote " . count($dnsbl_written) . " DNSBL feed entries:" . PHP_EOL;' \
-    'foreach ($dnsbl_written as $e) { echo "  " . $e["aliasname"] . " - " . $e["action"] . PHP_EOL; }'
+    'foreach ($dnsbl_written as $e) { echo "  " . $e["aliasname"] . " - " . $e["action"] . " - " . ($e["logging"] ?? "?") . PHP_EOL; }'
 }
 
 # ---------------------------------------------------------------------------
