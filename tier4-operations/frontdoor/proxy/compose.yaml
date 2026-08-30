@@ -191,7 +191,7 @@ services:
     tmpfs:
       - /tmp:size=64m,mode=1777
     environment:
-      CONTENT_REPO_URL: "${CONTENT_REPO_URL:-https://github.com/cybrd0ne/suru-frontdoor-content.git}"
+      CONTENT_REPO_URL: "${CONTENT_REPO_URL:-https://github.com/cdi-net/suru-frontdoor-content.git}"
       CONTENT_REPO_REF: "${CONTENT_REPO_REF:-main}"
       CONTENT_REPO_TOKEN: "${CONTENT_REPO_TOKEN}"
       CONTENT_SYNC_PERIOD: "${CONTENT_SYNC_PERIOD:-60s}"

@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Security vulnerability
-    url: https://github.com/cybrd0ne/suru-foss/security/advisories/new
+    url: https://github.com/cdi-net/suru-foss/security/advisories/new
     about: Report security issues privately — please do NOT open a public issue. See SECURITY.md.
   - name: Question / discussion
-    url: https://github.com/cybrd0ne/suru-foss/discussions
+    url: https://github.com/cdi-net/suru-foss/discussions
     about: Ask questions and discuss ideas before opening a feature request.

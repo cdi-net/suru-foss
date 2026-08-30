@@ -40,7 +40,7 @@
 http_routes:
   # The frontdoor's `/` is served by nginx directly from the shared
   # `frontdoor-content` volume populated by suru.t4.frontdoor.content
-  # (git-sync of cybrd0ne/suru-frontdoor-content). The static index
+  # (git-sync of cdi-net/suru-frontdoor-content). The static index
   # page lists every route below. No entry for `/` appears here.
 
   - path: /dashboards/
