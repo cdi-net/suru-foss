@@ -35,7 +35,7 @@ tier2-telemetry/
 │       └── suru-ioc.dat             # Zeek Intel Framework IOC feed
 ├── pfblockerng/
 │   ├── categories/
-│   │   ├── dnsbl-categories.yml     # DNSBL feed list (5 feeds)
+│   │   ├── dnsbl-categories.yml     # DNSBL feed list (9 feeds)
 │   │   └── ip-reputation.yml        # IP reputation feed list
 │   └── allowlists/
 │       └── local-allowlist.txt
@@ -59,7 +59,13 @@ tier2-telemetry/
 > may exist in `tier1-perimeter/`. PRs violating this invariant must be rejected.
 
 ### Adding a new DNSBL feed
-1. Add an entry to `pfblockerng/categories/dnsbl-categories.yml`
+1. Add an entry to `pfblockerng/categories/dnsbl-categories.yml`.
+   The optional per-feed `blocking:` key selects the pfBlockerNG
+   Logging/Blocking Mode — omit it for the default `null_log` (Null Block:
+   blocked domains answer `0.0.0.0` and clients fail instantly). `vip`
+   (block-page webserver) is opt-in only and requires the DNSBL VIP to be
+   reachable from client LANs; `verify-pfblockerng-feeds.sh`'s no-blackhole
+   probe enforces this invariant on every run.
 2. Run `make render PLATFORM=pfsense` from `tier1-perimeter/`
 3. Review `tier1-perimeter/rendered/pfsense/pfblockerng/pfblockerng.xml`
 4. Run `make deploy PLATFORM=pfsense`
