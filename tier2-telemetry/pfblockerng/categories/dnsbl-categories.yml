@@ -97,15 +97,11 @@ feeds:
     desc: "Disconnect.me tracking domains"
     mitre: []
 
-  - aliasname: SURU_Disconnect_Malware
-    action: "unbound"
-    url: "https://s3.amazonaws.com/lists.disconnect.me/simple_malware.txt"
-    format: Domain
-    state: Enabled
-    update: Weekly
-    priority: 3
-    desc: "Disconnect.me malware-serving domains"
-    mitre: [T1071.004, T1588]
+  # SURU_Disconnect_Malware removed 2026-08-30 (feed audit): the feed is an
+  # empty husk — simple_malware.txt is 110 bytes containing exactly ONE
+  # domain, Disconnect's own test record malware-check.disconnect.me
+  # (fetched live). Zero detection value; the importer's merge-by-aliasname
+  # prune removes the alias from deployed routers on the next deploy.
 
   - aliasname: SURU_MVPS
     action: "unbound"

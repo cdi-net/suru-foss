@@ -35,7 +35,7 @@ tier2-telemetry/
 │       └── suru-ioc.dat             # Zeek Intel Framework IOC feed
 ├── pfblockerng/
 │   ├── categories/
-│   │   ├── dnsbl-categories.yml     # DNSBL feed list (9 feeds)
+│   │   ├── dnsbl-categories.yml     # DNSBL feed list (8 feeds)
 │   │   └── ip-reputation.yml        # IP reputation feed list
 │   └── allowlists/
 │       └── local-allowlist.txt
