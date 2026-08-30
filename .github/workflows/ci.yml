@@ -167,11 +167,27 @@ jobs:
             echo "::notice::No go.mod found — gosec gate is inert until Go code is added."
           fi
 
+      - name: Set up Go
+        if: steps.detect.outputs.has_go == 'true'
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
+        with:
+          go-version: stable
+
       - name: gosec
         if: steps.detect.outputs.has_go == 'true'
-        uses: securego/gosec@9e75c0576c9878035d4221392108d458abe10fc3  # v2.28.0
-        with:
-          args: ./...
+        run: |
+          # gosec v2.28.0 — same version as the formerly-used action
+          # (securego/gosec@9e75c0576c9878035d4221392108d458abe10fc3).
+          # Installed via go install: the org Actions policy allows only
+          # GitHub-owned and explicitly allowlisted actions, and
+          # securego/gosec is not on the allowlist (workflow startup_failure
+          # otherwise). Loop covers nested go.mod files.
+          go install github.com/securego/gosec/v2/cmd/gosec@v2.28.0
+          find . -name go.mod -not -path '*/vendor/*' | while read -r modfile; do
+            dir="$(dirname "${modfile}")"
+            echo "=== gosec: ${dir} ==="
+            (cd "${dir}" && gosec ./...)
+          done
 
   # ────────────────────────────────────────────────────────────
   # 4. Scan — trivy (SHA-pinned), semgrep (digest-pinned, tokenless)
@@ -204,7 +220,7 @@ jobs:
           ignore-unfixed: true
 
       - name: Upload Trivy FS results
-        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3  # v4.37.6
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938  # v4.37.9
         if: always()
         continue-on-error: true   # non-fatal: repo may not have code scanning enabled
         with:
