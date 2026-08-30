@@ -232,9 +232,14 @@ _generate_php_importer_ip() {
     [[ -z "${description}" ]] && description="${aliasname}"
     logging="enabled"
 
-    # PHP single-quote escaping for description / aliasname.
-    local desc_esc="${description//\'/\\\'}"
-    local alias_esc="${aliasname//\'/\\\'}"
+    # Escape every field for safe embedding in PHP single-quoted strings.
+    # _php_esc escapes backslash *then* single-quote (correct order); the old
+    # ${var//\'/\\\'} form escaped ' but not a trailing \, reopening the same
+    # single-quote break-out the DNSBL importer above already guards against.
+    local alias_esc; alias_esc="$(_php_esc "${aliasname}")"
+    local desc_esc; desc_esc="$(_php_esc "${description}")"
+    local action_esc; action_esc="$(_php_esc "${action}")"
+    local cron_esc; cron_esc="$(_php_esc "${cron}")"
 
     # Open the alias entry. We emit all fields the pfBlockerNG package writes
     # on a GUI save; omitting some causes the GUI to show empty cells but no
@@ -243,8 +248,8 @@ _generate_php_importer_ip() {
     printf "\$ipv4_aliases[] = [\n"
     printf "  'aliasname'    => '%s',\n" "${alias_esc}"
     printf "  'description'  => '%s',\n" "${desc_esc}"
-    printf "  'action'       => '%s',\n" "${action}"
-    printf "  'cron'         => '%s',\n" "${cron}"
+    printf "  'action'       => '%s',\n" "${action_esc}"
+    printf "  'cron'         => '%s',\n" "${cron_esc}"
     printf "  'aliaslog'     => '%s',\n" "${logging}"
     printf "  'stateremoval' => 'enabled',\n"
     printf "  'row'          => [\n"
@@ -262,10 +267,15 @@ _generate_php_importer_ip() {
       [[ -z "${header}" ]] && header="${aliasname}_${j}"
       [[ -z "${format}" ]] && format="auto"
       [[ -z "${state}" ]]  && state="Enabled"
-      local url_esc="${url//\'/\\\'}"
-      local hdr_esc="${header//\'/\\\'}"
+      # Escape all four feed fields via _php_esc (backslash-then-quote). The
+      # prior ${var//\'/\\\'} form left format/state unescaped entirely and
+      # url/header vulnerable to a trailing-backslash break-out.
+      local url_esc; url_esc="$(_php_esc "${url}")"
+      local hdr_esc; hdr_esc="$(_php_esc "${header}")"
+      local fmt_esc; fmt_esc="$(_php_esc "${format}")"
+      local state_esc; state_esc="$(_php_esc "${state}")"
       printf "    ['format'=>'%s','state'=>'%s','url'=>'%s','header'=>'%s'],\n" \
-        "${format}" "${state}" "${url_esc}" "${hdr_esc}"
+        "${fmt_esc}" "${state_esc}" "${url_esc}" "${hdr_esc}"
       j=$(( j + 1 ))
     done
 
