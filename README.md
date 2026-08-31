@@ -6,7 +6,7 @@ Detection and response — not alert spam.
 [![CI](https://github.com/cdi-net/suru-foss/actions/workflows/ci.yml/badge.svg)](https://github.com/cdi-net/suru-foss/actions/workflows/ci.yml)
 [![License: MPL 2.0](https://img.shields.io/badge/License-MPL%202.0-brightgreen.svg)](./LICENSE)
 
-> This is **suru-foss**, the open-source edition of the SURU platform, released
+> This is **suru-foss**, the open-source edition of the [SURU platform](https://cdinet.ro/#suru), released
 > under the **Mozilla Public License 2.0**. It provides a complete, deployable
 > defence-in-depth stack built entirely from open-source components. It is
 > designed to be simple to understand, review, and extend by any human or tool —
