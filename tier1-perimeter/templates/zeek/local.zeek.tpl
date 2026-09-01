@@ -23,3 +23,9 @@ redef capture_filters = { ["default"] = "not port 22" };
 # --- Detection scripts injected by render-zeek.sh from tier2-telemetry/zeek/scripts/ ---
 # Includes @load suru-base (engine bootstrap) automatically via the *.zeek glob.
 __ZEEK_SCRIPTS__
+
+# Telemetry scope: keep mDNS (UDP/5353) records in dns.log only when
+# the operator opts in via ZEEK_LOG_MDNS=true. Default drops them (~70% of DNS
+# event volume, no per-record security value; detection scripts are unaffected
+# — they run on the live event stream, not the log). Substituted by render-zeek.sh.
+redef SURU_Telemetry::log_mdns = __ZEEK_LOG_MDNS__;

@@ -45,6 +45,11 @@ _PF_RENDERED_PFBLOCKER_PHP="pfblockerng/pfblockerng-import.php"
 # Conservative: only touches SURU-claimed keys, preserves operator settings
 # for interface bindings, listener ports, custom TLDs etc.
 _PF_APPLIER_PFB_GLOBALS="$(cd "${SCRIPT_DIR}/../../pfsense" && pwd)/pfblockerng-globals-apply.php"
+# Static PHP applier for the unbound local-zones platform default:
+# manages a SURU sentinel block in unbound/custom_options so local
+# namespaces (.local, wpad.<domain>) are answered locally, never forwarded
+# upstream. Preserves operator custom options outside the sentinel block.
+_PF_APPLIER_UNBOUND_LZ="$(cd "${SCRIPT_DIR}/../../pfsense" && pwd)/unbound-localzones-apply.php"
 _PF_RENDERED_ZEEK_LOCAL="zeek/local.zeek"
 _PF_RENDERED_ZEEK_CTRL="zeek/zeekctl.cfg"
 _PF_RENDERED_ZEEK_SCRIPTS_DIR="zeek/scripts"
@@ -946,6 +951,35 @@ EOPHP
 
   # zeekctl deploy activates the freshly written local.zeek and node.cfg.
   _pf_remote_exec "${_ZSUDO}zeekctl deploy"
+
+  # --- unbound local-zones platform default ----------------------------------
+  # Answer local namespaces locally, never forwarded upstream:
+  #   .local (RFC 6762) + wpad.<system domain> -> always_nxdomain (SURU sentinel
+  #     block in the DNS Resolver custom options), and
+  #   the system domain itself -> system_domain_local_zone_type=static (pfSense
+  #     native field) so unknown internal names get a LOCAL NXDOMAIN instead of
+  #     leaking to / looping through the upstream forwarder.
+  # Runs BEFORE the pfBlockerNG stage; the applier re-runs
+  # sync_package_pfblockerng('noupdates') after reconfiguring unbound (the
+  # module-config regression on resolver reconfigure) and verifies the zones +
+  # python module + system-domain static from live config. The applier
+  # auto-skips the system-domain static when a domain-override forwards the
+  # system domain to a NON-local (real internal) DNS server, so it never breaks
+  # split-horizon. Override the whole stage with SURU_UNBOUND_LOCALZONES=false;
+  # keep the .local hardening but skip only the system-domain static with
+  # SURU_UNBOUND_SYSTEM_DOMAIN_STATIC=false.
+  if [[ "${SURU_UNBOUND_LOCALZONES:-true}" == "true" ]]; then
+    local pf_unbound_lz_remote="${_PF_REMOTE_STAGING}/unbound-localzones-apply.php"
+    _pf_stage_and_install "${_PF_APPLIER_UNBOUND_LZ}" "${pf_unbound_lz_remote}"
+    local _ULZSUDO=""
+    [[ "${ssh_user}" != "root" ]] && _ULZSUDO="sudo "
+    local _ulz_args=""
+    [[ "${SURU_UNBOUND_SYSTEM_DOMAIN_STATIC:-true}" != "true" ]] && _ulz_args=" --no-system-domain-static"
+    _pf_remote_exec "${_ULZSUDO}php ${pf_unbound_lz_remote}${_ulz_args}"
+    _pf_remote_exec "${_ULZSUDO}rm -f '${pf_unbound_lz_remote}'"
+  else
+    echo "[pfsense] Skipping unbound local-zones (SURU_UNBOUND_LOCALZONES=false)."
+  fi
 
   # --- pfBlockerNG global baseline (master + DNSBL feature switches) ----------
   # Run BEFORE the feed importer so feeds land into a known-on configuration.

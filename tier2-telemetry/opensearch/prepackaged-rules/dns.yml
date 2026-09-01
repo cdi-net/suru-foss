@@ -92,7 +92,19 @@ rules:
 
   - rule_id: "1ec4b281-aa65-46a2-bdae-5fd830ed914e"
     title: "Possible DNS Tunneling"
-    enabled: true
+    enabled: false
+    disabled_reason: >
+      DISABLED 2026-08-30: live findings audit showed this rule firing on
+      effectively EVERY Zeek DNS event — 4.7M finding docs across the
+      .opensearch-sap-dns-findings* generations vs ~2.15M source DNS events/30d
+      (latest-300 sample: 300/300 were this rule). The field_mapping_note below
+      predicted the mechanism: aliased to the full FQDN, the match degenerates to
+      a length/volume match on full query names, and 40.3% of the >=40-char name
+      surface is mDNS/DNS-SD/AD-SRV local chatter. Tunneling coverage remains via
+      the precision entropy rule (suru-dns-entropy.zeek ->
+      SURU_DNS::DNS_High_Entropy_Query, sigma dns-tunneling-high-entropy.yml).
+      Re-enable ONLY with a proper eTLD+1 field (dns.question.registered_domain
+      materialised at ingest) + local-namespace exclusions + a documented soak.
     level: high
     field_available: false     # dns.question.registered_domain NOT in zeek index
     field_mapping_note: >
@@ -111,7 +123,7 @@ rules:
         - id: T1071.004
           name: "Application Layer Protocol: DNS"
         - id: T1048.003
-          name: "Exfiltration Over Alternative Protocol"
+          name: "Exfiltration Over Alternative Protocol: Exfiltration Over Unencrypted Non-C2 Protocol"
     tier1_boundary: exclusion-predicates-required
     rationale: >
       Volume-based DNS tunneling detection via registered-domain aggregation. Complements
