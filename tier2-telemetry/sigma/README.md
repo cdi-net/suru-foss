@@ -83,6 +83,7 @@ sigma/
       exploit-public-facing-application.yml          T1190
     command-and-control/
       dns-tunneling-high-entropy.yml                 T1071.004
+      dns-excessive-name-length.yml                  T1071.004, T1048.003
     lateral-movement/
       remote-services.yml                            T1021 — STUB (no live ECS source)
 ```

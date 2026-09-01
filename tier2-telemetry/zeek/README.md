@@ -11,10 +11,12 @@ zeek/
 ├── scripts/             # Custom Zeek detection and telemetry scripts
 │   ├── suru-base.zeek            # Engine bootstrap — base protocols, intel framework, log dir (GUI-save resilient)
 │   ├── soho-telemetry.zeek       # Flow suppression — local-to-local noise reduction
-│   ├── suru-dns-entropy.zeek     # DNS tunneling detection (TA0011/T1071.004)
+│   ├── suru-dns-entropy.zeek     # DNS tunneling detection — entropy + length legs (TA0011/T1071.004, TA0010/T1048.003)
+│   ├── suru-name-poisoning.zeek  # LLMNR/NBT-NS Responder-class poisoning + WPAD-answer detection (TA0006/T1557.001)
 │   ├── suru-lateral-movement.zeek # Admin-port fan-out lateral movement (TA0008/T1021)
 │   ├── suru-ssh-bruteforce.zeek  # SSH brute-force / spray connection rate (TA0006/T1110)
 │   ├── suru-doh-detect.zeek      # DoH resolver-bypass via SNI (TA0005/T1572, T1071.001)
+│   ├── suru-telemetry-scope.zeek # mDNS log-stream scoping — NOT a detection; dns.log filter only, ZEEK_LOG_MDNS opt-in
 │   └── suru-ssl-ja3.zeek.optional # JA3/JA3S fingerprinting (TA0011/T1071) — disabled (.optional; rename to .zeek to enable)
 └── intel/               # Zeek Intelligence Framework feeds
     └── suru-ioc.dat     # SURU IOC feed (domain/IP/hash format)

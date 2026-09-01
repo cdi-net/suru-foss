@@ -1,0 +1,48 @@
+# SURU Platform — Sigma Rule: DNS Tunneling / Excessive Query Name Length
+# MITRE ATT&CK: TA0011 Command and Control / T1071.004 (Application Layer
+# Protocol: DNS); TA0010 Exfiltration / T1048.003 (Exfiltration Over
+# Alternative Protocol: Exfiltration Over Unencrypted Non-C2 Protocol)
+# Source: Zeek notice.log, normalized to ECS v8 by the tier3 Zeek pipeline.
+# Correlates with: zeek/scripts/suru-dns-entropy.zeek (raises
+#   SURU_DNS::DNS_Excessive_Name_Length via the Notice framework — the
+#   length leg added alongside the entropy leg).
+# Validation: sigma check dns-excessive-name-length.yml
+# Why notice-based rather than per-event in SA: the retired SA pre-packaged
+# "Possible DNS Tunneling" rule (1ec4b281) shipped with a match-all detection
+# body (parent_domain: '*') and fired on every DNS event. Length
+# thresholding, port scoping (unicast 53 only), and local-namespace
+# exclusion all happen in the Zeek script — this rule only surfaces the
+# resulting notice, the same proven pattern as the entropy rule.
+title: SURU - DNS Tunneling (Excessive Query Name Length)
+id: 7b4e3f2a-0021-4c6d-9e0f-b2c3d4e5f6c9
+status: experimental
+description: |
+  Detects unicast DNS queries whose full query name is at or above the
+  suru-dns-entropy.zeek length threshold (default 100 chars) after excluding
+  multicast/service-discovery namespaces. Legitimate FQDNs rarely exceed
+  ~80 characters while iodine/dns2tcp-class tunnels pack labels toward the
+  255-byte protocol ceiling. Raised by SURU's custom Zeek detection via the
+  Notice framework and surfaced in ECS as event.dataset:"notice" with
+  rule.name = SURU_DNS::DNS_Excessive_Name_Length.
+author: SURU Platform / SURU Detection Engineering
+date: 2026/08/30
+modified: 2026/08/30
+tags:
+  - attack.ta0011
+  - attack.t1071.004
+  - attack.ta0010
+  - attack.t1048.003
+logsource:
+  category: notice
+  product: zeek
+detection:
+  selection:
+    event.dataset: notice
+    event.kind: alert
+    rule.name: 'SURU_DNS::DNS_Excessive_Name_Length'
+  condition: selection
+falsepositives:
+  - DNSSEC/DKIM-style TXT lookups with very long owner names
+  - Antivirus/security products encoding telemetry into DNS labels
+    (extend the exclusion set in zeek/scripts/suru-dns-entropy.zeek)
+level: high

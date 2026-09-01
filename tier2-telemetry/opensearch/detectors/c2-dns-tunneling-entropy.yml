@@ -31,19 +31,29 @@ field_mapping_ref: tier2-telemetry/opensearch/field-mappings/suru_zeek_ssl.yml
 sigma_rules:
   - ref: tier2-telemetry/sigma/rules/command-and-control/dns-tunneling-high-entropy.yml
     id: 7b4e3f2a-0002-4c6d-9e0f-b2c3d4e5f6a7
+  # Length leg: replaces the retired SA pre-packaged "Possible DNS Tunneling"
+  # (1ec4b281 — match-all detection body) with a Zeek-side length threshold
+  # on unicast port 53, local namespaces excluded in suru-dns-entropy.zeek.
+  - ref: tier2-telemetry/sigma/rules/command-and-control/dns-excessive-name-length.yml
+    id: 7b4e3f2a-0021-4c6d-9e0f-b2c3d4e5f6c9
 
 mitre:
   tactics:
     - id: TA0011
       name: Command and Control
+    - id: TA0010
+      name: Exfiltration
   techniques:
     - id: T1071.004
       name: "Application Layer Protocol: DNS"
+    - id: T1048.003
+      name: "Exfiltration Over Alternative Protocol: Exfiltration Over Unencrypted Non-C2 Protocol"
 
 detection_filter:
   query: >
     event.dataset:"notice" AND event.kind:"alert" AND
-    rule.name:"SURU_DNS::DNS_High_Entropy_Query"
+    (rule.name:"SURU_DNS::DNS_High_Entropy_Query" OR
+     rule.name:"SURU_DNS::DNS_Excessive_Name_Length")
 
 schedule:
   period_minutes: 5

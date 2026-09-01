@@ -19,6 +19,8 @@ tier1-perimeter/
 │   └── opnsense/
 │       ├── config-base.xml.tpl
 │       └── syslog-ng.conf.tpl
+├── pfsense/                          # Static PHP appliers staged + run on the router by the pfSense driver
+│   └── unbound-localzones-apply.php  # Local-DNS hygiene default (see section below)
 ├── rendered/                         # BUILD OUTPUT — git-ignored, do not edit
 │   ├── pfsense/                      # Populated by `make render PLATFORM=pfsense`
 │   └── opnsense/                     # Populated by `make render PLATFORM=opnsense`
@@ -59,6 +61,36 @@ make deploy-full PLATFORM=pfsense DRY_RUN=true
 | `WAN_IFACE` | `igb0` | WAN interface name |
 | `LAN_IFACE` | `igb1` | LAN interface name |
 | `ROUTER_SENSOR_NAME` | `suru-tier1` | Sensor label in logs |
+
+## Local-DNS hygiene (platform default)
+
+The pfSense deploy applies a local-DNS default via
+`pfsense/unbound-localzones-apply.php` (runs after the Zeek stage, before
+pfBlockerNG):
+
+- **Special-use zones answered locally** — `local.` (RFC 6762 mDNS),
+  `alt.` (RFC 9476), and the two name-hijack guards `wpad.<system domain>.`
+  / `isatap.<system domain>.` are declared `always_nxdomain` in a managed
+  sentinel block inside the DNS Resolver custom options (operator content
+  outside the block is never touched). These names must never be forwarded
+  upstream: `.local` leaks LAN hostnames to the public roots, and an
+  answered WPAD/ISATAP query hands clients to a rogue proxy/gateway.
+- **System domain made locally authoritative** — pfSense's native
+  `system_domain_local_zone_type` is set to `static`, so unknown internal
+  names get a local NXDOMAIN instead of leaking upstream. A reversible
+  split-horizon guard inspects `domainoverrides` first: if the system
+  domain legitimately forwards to a real internal DNS server, `static` is
+  skipped (and a previously-set `static` is actively reverted) so
+  split-horizon resolution is never broken. Gates:
+  `SURU_UNBOUND_LOCALZONES` (whole stage) and
+  `SURU_UNBOUND_SYSTEM_DOMAIN_STATIC` (static only), both default `true`.
+- **mDNS telemetry scoping** — `ZEEK_LOG_MDNS` (default `false`) drops
+  mDNS/5353 records from Zeek's `dns.log` before shipping (~70% of DNS
+  event volume on a 30d live baseline, no per-record security value).
+  Log-stream filter only: detection scripts run on the live event stream
+  and still fire on mDNS-borne attacks.
+
+The applier is pfSense-specific; OPNsense support is not yet implemented.
 
 ## Invariant 11
 

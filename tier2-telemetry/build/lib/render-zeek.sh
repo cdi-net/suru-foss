@@ -37,7 +37,12 @@ render_zeek() {
     # ZEEK_IFACE: physical trunk interface (e.g. igb1). Defaults to em0.
     # Use the parent trunk, not a VLAN sub-interface — Zeek handles 802.1Q natively.
     local zeek_iface_val="${ZEEK_IFACE:-em0}"
-    sed "s|__ZEEK_SCRIPTS__|${load_lines}|g; s|__ZEEK_IFACE__|${zeek_iface_val}|g" "${tpl}" > "${out}"
+    # ZEEK_LOG_MDNS: true keeps mDNS/5353 records in dns.log; default
+    # (unset/anything-but-true) drops them. Normalised to a Zeek bool literal
+    # so the rendered `redef SURU_Telemetry::log_mdns = <T|F>;` always parses.
+    local zeek_log_mdns_val="F"
+    [[ "${ZEEK_LOG_MDNS:-false}" == "true" ]] && zeek_log_mdns_val="T"
+    sed "s|__ZEEK_SCRIPTS__|${load_lines}|g; s|__ZEEK_IFACE__|${zeek_iface_val}|g; s|__ZEEK_LOG_MDNS__|${zeek_log_mdns_val}|g" "${tpl}" > "${out}"
 
     # Render zeekctl.cfg — substitute __ZEEK_MAILTO__.
     # ZEEK_MAILTO defaults to root (local delivery; no relay required).
