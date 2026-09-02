@@ -53,15 +53,56 @@ if (count($files) === 0) {
   exit(3);
 }
 
+// Apply-time default for the foreign-domain detection: when the
+// render left the @@SURU_AUTHORIZED_AD_DOMAINS@@ marker (env unset), the
+// authorized set defaults to THIS router's configured system domain — read
+// live from config, never hardcoded (same deployment-agnostic principle as
+// unbound-localzones-apply.php). The domain is shape-gated (the same
+// RFC 1035-ish contract render-zeek.sh / _policy_valid_domain enforce at
+// render time) before it is written into Zeek source (CWE-20/74); on an
+// empty/invalid domain the quoted
+// marker entry is REMOVED entirely — fail-safe by omission, the same branch
+// shape unbound-localzones-apply.php uses — leaving a valid empty set
+// (nothing authorized, so AD-membership bursts still alert) rather than an
+// empty-string entry whose suffix-match semantics would be undefined.
+$suru_system_domain = strtolower((string) config_get_path('system/domain', ''));
+if (!preg_match('/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/', $suru_system_domain)) {
+  $suru_system_domain = '';
+}
+
 $rows = [];
 foreach ($files as $stage_path) {
   $name = basename($stage_path);
   $final = $site_dir . '/' . $name;
-  if (!copy($stage_path, $final)) {
-    fwrite(STDERR, "[zeek-scripts-apply] copy failed: {$stage_path} -> {$final}\n");
+  $content = file_get_contents($stage_path);
+  if ($content === false) {
+    fwrite(STDERR, "[zeek-scripts-apply] read failed: {$stage_path}\n");
     exit(4);
   }
-  @chmod($final, 0644);
+  if (strpos($content, '@@SURU_AUTHORIZED_AD_DOMAINS@@') !== false) {
+    if ($suru_system_domain === '') {
+      fwrite(STDERR, "[zeek-scripts-apply] WARN: system domain empty/non-DNS-shaped — no authorized-domains entry applied (empty set: every AD-membership burst will alert); set SURU_AUTHORIZED_AD_DOMAINS in .env\n");
+      $content = str_replace('"@@SURU_AUTHORIZED_AD_DOMAINS@@"', '', $content);
+      echo "[zeek-scripts-apply] {$name}: authorized AD domains set is EMPTY (no valid system domain)" . PHP_EOL;
+    } else {
+      $content = str_replace('@@SURU_AUTHORIZED_AD_DOMAINS@@', $suru_system_domain, $content);
+      echo "[zeek-scripts-apply] {$name}: authorized AD domains defaulted to the system domain" . PHP_EOL;
+    }
+  }
+  // Write-to-temp + rename so $final is atomically replaced — an interrupt
+  // (reboot, PHP timeout) leaves either the old script or the new one,
+  // never a truncated file that zeekctl deploy would then load.
+  $tmp = $final . '.suru-tmp';
+  if (file_put_contents($tmp, $content) === false) {
+    fwrite(STDERR, "[zeek-scripts-apply] write failed: {$tmp}\n");
+    exit(4);
+  }
+  @chmod($tmp, 0644);
+  if (!rename($tmp, $final)) {
+    @unlink($tmp);
+    fwrite(STDERR, "[zeek-scripts-apply] rename failed: {$tmp} -> {$final}\n");
+    exit(4);
+  }
   $rows[] = [
     'zeekscriptpath' => $final,
     'name'           => 'SURU ' . basename($name, '.zeek'),

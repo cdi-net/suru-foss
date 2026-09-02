@@ -1,0 +1,51 @@
+# SURU Platform — Sigma Rule: Foreign-Domain Member Device on Trusted Segment
+# MITRE ATT&CK: TA0007 Discovery / T1018 Remote System Discovery — the
+# observed behaviour is AD service (domain controller) location via DNS SRV
+# (_ldap._tcp/_kerberos/_msdcs) plus WPAD lookup. Secondary context: the
+# same behaviour for a non-authorized domain invites poisoning/relay against
+# the device (T1557.001) and leaks the foreign org's naming into the
+# trusted segment.
+# Source: Zeek notice.log (SURU_ForeignDomain::ForeignDomain_Member_Device,
+#   raised by zeek/scripts/suru-foreign-domain.zeek), normalized to
+#   ECS v8 by the tier3 Zeek pipeline (event.dataset:"notice" carries
+#   rule.name = the Notice::Type).
+# Why notice-based rather than per-event: the Zeek script owns thresholding
+#   (>=25 AD-shaped foreign queries/24h) and DHCP identity correlation; the
+#   SIEM leg turns the once-per-device-per-day notice into a finding + email.
+# Validation: sigma check foreign-domain-member-device.yml
+title: Foreign-Domain Member Device on Trusted Segment
+id: 3f8a1c62-71b4-4e09-9d2a-c5e0b7a41d88
+status: experimental
+description: >
+  A client on the trusted segment performed sustained Active Directory
+  membership discovery (_ldap._tcp/_kerberos/_msdcs/wpad lookups) for a
+  domain outside the deployment's authorized set — a guest or
+  foreign-managed device. The Zeek notice already carries the device's
+  DHCP-known hostname and MAC when available. Response runbook: authorize
+  the domain (SURU_AUTHORIZED_AD_DOMAINS or redef authorized_domains), move the
+  device to the guest segment, or quarantine it.
+references:
+  - https://attack.mitre.org/techniques/T1018/
+  - https://attack.mitre.org/techniques/T1557/001/
+author: SURU Platform
+date: 2026/09/02
+modified: 2026/09/02
+tags:
+  - attack.ta0007
+  - attack.t1018
+logsource:
+  category: notice
+  product: zeek
+detection:
+  selection:
+    event.dataset: notice
+    event.kind: alert
+    rule.name: 'SURU_ForeignDomain::ForeignDomain_Member_Device'
+  condition: selection
+falsepositives:
+  - A legitimately domain-joined machine whose domain is not yet in
+    SURU_AUTHORIZED_AD_DOMAINS — authorize the domain rather than ignoring
+    the alert
+  - An accepted guest device — redef exempt_hosts for the device in
+    local.zeek instead of widening the domain set
+level: medium

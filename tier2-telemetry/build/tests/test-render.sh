@@ -92,6 +92,62 @@ sec001_payload="$(_php_esc "'];system('id');#")"
   && [[ "$sec001_payload" == $'\\\'];system(\\\'id\\\');#' ]] \
   && _pass "injection payload neutralised" || _fail "injection payload NOT neutralised: $sec001_payload"
 
+# Test 5d: render_zeek SURU_AUTHORIZED_AD_DOMAINS validation (regression).
+# The authorized-domains value is spliced into an EXECUTED Zeek string literal;
+# render-zeek.sh gates every entry on a strict RFC 1035-ish domain shape. Pins all
+# three branches: valid list → quoted splice; injection/invalid shape → render
+# FAILS (no artifact with the payload); unset → marker survives for the
+# apply-time substitution. Same convention as the 5c injection regression.
+echo "[test-render] Test 5d: render_zeek authorized-domains validation"
+# shellcheck source=../lib/render-zeek.sh
+source "${SCRIPT_DIR}/../lib/render-zeek.sh"
+fd_dir="$(mktemp -d)"
+mkdir -p "${fd_dir}/t1/templates/zeek" "${fd_dir}/t2/zeek/scripts"
+printf '__ZEEK_SCRIPTS__ __ZEEK_IFACE__ __ZEEK_LOG_MDNS__\n' > "${fd_dir}/t1/templates/zeek/local.zeek.tpl"
+printf 'const authorized_domains: set[string] = { "@@SURU_AUTHORIZED_AD_DOMAINS@@" } &redef;\n' \
+  > "${fd_dir}/t2/zeek/scripts/suru-foreign-domain.zeek"
+fd_out="${fd_dir}/rendered/zeek/scripts/suru-foreign-domain.zeek"
+
+# Branch 1: valid mixed-case/spaced list → lowercased quoted entries, no marker
+mkdir -p "${fd_dir}/rendered/zeek"
+if (SURU_AUTHORIZED_AD_DOMAINS=" Corp.Example , branch.example " \
+    render_zeek pfsense "${fd_dir}/t1" "${fd_dir}/t2" "${fd_dir}/rendered" false > /dev/null 2>&1) \
+   && grep -qF '{ "corp.example", "branch.example" }' "${fd_out}" \
+   && ! grep -qF 'SURU_AUTHORIZED_AD_DOMAINS@@' "${fd_out}"; then
+  _pass "valid list spliced (lowercased, no marker residue)"
+else
+  _fail "valid-list splice broken (expected quoted lowercased entries)"
+fi
+
+# Branch 2: quote-breakout payload → render must FAIL and no artifact may carry it
+if (SURU_AUTHORIZED_AD_DOMAINS='corp.example,evil"; @load /x' \
+    render_zeek pfsense "${fd_dir}/t1" "${fd_dir}/t2" "${fd_dir}/rendered" false > /dev/null 2>&1); then
+  _fail "injection payload accepted — render should exit non-zero"
+else
+  if grep -rqF '@load /x' "${fd_dir}/rendered" 2> /dev/null; then
+    _fail "bare-quote breakout reached a rendered artifact"
+  else
+    _pass "injection payload fails the render; no breakout in rendered output"
+  fi
+fi
+
+# Branch 3: unset → marker survives for zeek-scripts-apply.php substitution
+if (env -u SURU_AUTHORIZED_AD_DOMAINS \
+    bash -c "source '${SCRIPT_DIR}/../lib/render-zeek.sh'; render_zeek pfsense '${fd_dir}/t1' '${fd_dir}/t2' '${fd_dir}/rendered' false" > /dev/null 2>&1) \
+   && grep -qF '{ "@@SURU_AUTHORIZED_AD_DOMAINS@@" }' "${fd_out}"; then
+  _pass "unset env leaves the marker intact for apply-time substitution"
+else
+  _fail "unset-env fallback broken — marker must survive the render"
+fi
+# Branch 4: set-but-all-empty (e.g. ",") is an operator mistake → render fails
+if (SURU_AUTHORIZED_AD_DOMAINS=' , ' \
+    render_zeek pfsense "${fd_dir}/t1" "${fd_dir}/t2" "${fd_dir}/rendered" false > /dev/null 2>&1); then
+  _fail "all-empty SURU_AUTHORIZED_AD_DOMAINS accepted — must fail loudly, not fall through"
+else
+  _pass "set-but-no-valid-entries fails the render loudly"
+fi
+rm -rf "${fd_dir}"
+
 # Test 6: render.sh --scope tier3 --dry-run completes without error
 echo "[test-render] Test 6: dry-run --scope tier3"
 if bash "${RENDER}" --dry-run --scope tier3 ${_verbose_flag[@]+"${_verbose_flag[@]}"} 2>&1; then

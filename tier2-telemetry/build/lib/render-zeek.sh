@@ -58,6 +58,51 @@ render_zeek() {
       rm -rf "${rendered}/zeek/scripts"
       mkdir -p "${rendered}/zeek/scripts"
       cp "${scripts_dir}"/*.zeek "${rendered}/zeek/scripts/"
+
+      # SURU_AUTHORIZED_AD_DOMAINS: when set (comma-separated), the
+      # foreign-domain script's marker becomes quoted set entries here at
+      # render time. When UNSET the marker survives the render on purpose —
+      # zeek-scripts-apply.php substitutes the router's own configured
+      # system domain at apply time (deployment-agnostic default; the
+      # renderer cannot know a remote router's domain).
+      local fd_script="${rendered}/zeek/scripts/suru-foreign-domain.zeek"
+      if [[ -n "${SURU_AUTHORIZED_AD_DOMAINS:-}" && -f "${fd_script}" ]]; then
+        local _fd_list="" _fd_d _fd_bad=""
+        local _fd_ifs="${IFS}"
+        IFS=','
+        for _fd_d in ${SURU_AUTHORIZED_AD_DOMAINS}; do
+          _fd_d="$(printf '%s' "${_fd_d}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+          [[ -n "${_fd_d}" ]] || continue
+          # Strict RFC 1035-ish domain shape — this value is
+          # spliced into an executed Zeek string literal, so anything
+          # outside [a-z0-9.-] label shape (a quote above all) must fail
+          # the render, never reach the script.
+          if [[ ! "${_fd_d}" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]]; then
+            _fd_bad="${_fd_bad} '${_fd_d}'"
+            continue
+          fi
+          [[ -n "${_fd_list}" ]] && _fd_list="${_fd_list}, "
+          _fd_list="${_fd_list}\"${_fd_d}\""
+        done
+        IFS="${_fd_ifs}"
+        if [[ -n "${_fd_bad}" ]]; then
+          echo "[render-zeek:ERROR] SURU_AUTHORIZED_AD_DOMAINS entr(y/ies)${_fd_bad}: invalid domain shape (need a-z/0-9/hyphen labels, dot-separated, >=2 labels — same shape as policy domain entries)" >&2
+          return 1
+        fi
+        # Set-but-no-valid-entries (e.g. "," or whitespace) is an operator
+        # mistake, not the unset default — fail loudly rather than silently
+        # falling through to the apply-time system-domain substitution.
+        if [[ -z "${_fd_list}" ]]; then
+          echo "[render-zeek:ERROR] SURU_AUTHORIZED_AD_DOMAINS is set but contains no valid entries — unset it for the apply-time system-domain default, or provide a-z/0-9/hyphen domains" >&2
+          return 1
+        fi
+        if [[ -n "${_fd_list}" ]]; then
+          # Replace the whole quoted marker with the quoted list.
+          sed -i.bak "s|\"@@SURU_AUTHORIZED_AD_DOMAINS@@\"|${_fd_list}|" "${fd_script}" \
+            && rm -f "${fd_script}.bak"
+          echo "[render-zeek] ${platform}: authorized AD domains <- SURU_AUTHORIZED_AD_DOMAINS (${_fd_list})"
+        fi
+      fi
     fi
 
     # Copy intel feed
