@@ -13,6 +13,7 @@ zeek/
 │   ├── soho-telemetry.zeek       # Flow suppression — local-to-local noise reduction
 │   ├── suru-dns-entropy.zeek     # DNS tunneling detection — entropy + length legs (TA0011/T1071.004, TA0010/T1048.003)
 │   ├── suru-name-poisoning.zeek  # LLMNR/NBT-NS Responder-class poisoning + WPAD-answer detection (TA0006/T1557.001)
+│   ├── suru-foreign-domain.zeek  # Foreign-domain member-device detection + DHCP identity (TA0007/T1018)
 │   ├── suru-lateral-movement.zeek # Admin-port fan-out lateral movement (TA0008/T1021)
 │   ├── suru-ssh-bruteforce.zeek  # SSH brute-force / spray connection rate (TA0006/T1110)
 │   ├── suru-doh-detect.zeek      # DoH resolver-bypass via SNI (TA0005/T1572, T1071.001)

@@ -1,0 +1,76 @@
+# SURU Platform — Layer 2 Detector: Foreign-Domain Member Device
+# Binds Layer-1 Sigma rule:
+#   tier2-telemetry/sigma/rules/discovery/foreign-domain-member-device.yml [T1018]
+# to the suru_zeek_ssl (Layer 3) field-mapping family for notice.log-sourced
+# findings (event.dataset:"notice") — the same physical index/log-type the
+# other notice-based detectors use, scoped here by rule.name.
+#
+# The Zeek script (suru-foreign-domain.zeek) owns thresholding (>=25
+# AD-membership queries for a non-authorized domain per client per 24h),
+# DHCP identity correlation (hostname/MAC in the notice message), and the
+# authorized-domain set (SURU_AUTHORIZED_AD_DOMAINS, defaulting to the
+# deployment's system domain at apply time). This detector turns the
+# once-per-device-per-day notice into a SIEM finding + email.
+#
+# Tier 1 boundary: no perimeter mechanism blocks or adjudicates this
+# behaviour — the queries are ordinary unicast DNS from an internal client
+# (with the unbound local-zones defaults they resolve to local NXDOMAIN, which is a resolver answer,
+# not a block verdict), so there is no Tier-1 verdict to de-dup against.
+# The general blocked/block predicates are carried anyway as belt-and-braces
+# (they cannot false-suppress: notice events never carry those verdicts);
+# the feed-IOC predicate is deliberately omitted — an internal client's
+# identity is not a threat-feed indicator.
+
+name: guest-foreign-domain
+detector_name: suru-guest-foreign-domain
+detector_type: dns
+status: buildable
+buildable: true
+owner_tier: tier2-telemetry
+index_pattern: suru-zeek-*
+log_type: suru_zeek_ssl
+field_mapping_ref: tier2-telemetry/opensearch/field-mappings/suru_zeek_ssl.yml
+
+sigma_rules:
+  - ref: tier2-telemetry/sigma/rules/discovery/foreign-domain-member-device.yml
+    id: 3f8a1c62-71b4-4e09-9d2a-c5e0b7a41d88
+
+mitre:
+  tactics:
+    - id: TA0007
+      name: Discovery
+  techniques:
+    - id: T1018
+      name: "Remote System Discovery"
+
+detection_filter:
+  query: >
+    event.dataset:"notice" AND event.kind:"alert" AND
+    rule.name:"SURU_ForeignDomain::ForeignDomain_Member_Device"
+
+schedule:
+  period_minutes: 5
+
+exclusion_predicates:
+  - description: Belt-and-braces only — notice events never carry an inline-IPS verdict (no Tier-1 mechanism adjudicates this behaviour; see header)
+    query: 'NOT event.action:"blocked"'
+  - description: Belt-and-braces only — notice events never carry a firewall block verdict
+    query: 'NOT event.action:"block"'
+
+actions:
+  default: email
+  perimeter_block: false   # never applicable — the subject is an INTERNAL device; internal quarantine is its own future mechanism, not this action
+
+falsepositives:
+  - A legitimately domain-joined machine whose domain is missing from
+    SURU_AUTHORIZED_AD_DOMAINS — authorize the domain
+  - An accepted guest device — redef exempt_hosts for the device in
+    local.zeek, per the runbook in the notice message
+
+verification:
+  static: passed   # YAML schema + ECS field-existence checks
+  live_detection_confirmed: false
+  rationale: >
+    Live-fire confirmation contract: one notice per day for a known
+    foreign-domain device, none for authorized-domain clients; the SIEM
+    finding + email confirm on the first live firing.
