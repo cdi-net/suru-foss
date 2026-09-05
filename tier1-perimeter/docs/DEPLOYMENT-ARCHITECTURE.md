@@ -376,6 +376,7 @@ remote side as soon as the encrypt/decrypt step returns.
 | `_pf_deploy_suricata` | Push YAML + rule configs, run `suricata --test-config` on router |
 | `_pf_deploy_zeek` | Push Zeek site policy, SOHO telemetry module, and zeekctl.cfg; `mkdir -p /var/log/zeek` |
 | `_pf_reload_services` | `pfSsh.php playback svc` for syslog-ng + zeek; `suricatasc -c reload-rules` for live rule hot-reload |
+| Suricata log-management stage (`SURU_SURICATA_LOG_MGMT`) | `suricata-logmgmt-apply.php` enables the Suricata package's Log Management cron (`enable_log_mgmt`, unset by default — without it `eve.json` never rotates) and caps `eve.json`/`http.log` size + retention; the cron rotates by rename + SIGHUP, so syslog-ng never re-reads a rotated copy |
 
 ### Boot Persistence (syslog-ng, Zeek interface)
 
@@ -505,6 +506,9 @@ All variables are defined in `.env` (copied from `.env.example`):
 | `SURICATA_NETMAP_THREADS` | — | auto | Explicit netmap threads (1-8) for inline mode; unset = `min(NIC netmap queues, ncpu/2)` computed on the router (never `auto`). |
 | `SURICATA_DROP_CATEGORIES` | — | CRITICAL set | ET categories converted `alert→drop` so inline mode enforces (default: `emerging-botcc,emerging-malware,emerging-exploit,emerging-attack_response`). Empty value reverts the drop policy. |
 | `SURU_SURICATA_DROP_POLICY` | — | `true` | Set `false` to skip the drop-policy applier (does not revert an applied policy). |
+| `SURU_SURICATA_LOG_MGMT` | — | `true` | Enable the Suricata package's log-management cron and apply the caps below (global Suricata config, all interfaces) |
+| `SURICATA_EVE_LOG_LIMIT_KB` / `SURICATA_HTTP_LOG_LIMIT_KB` | — | `500000` | Per-file rotation size caps in KB (pfSense's unit) |
+| `SURICATA_LOG_RETENTION_HOURS` | — | `24` | Retention of rotated `eve.json.*` / `http.log.*` copies on the router |
 | `SURU_SAFETY_TIMER` | — | `true` | Arm a router-side auto-revert before an inline flip (self-lockout guard); disarmed on success. |
 | `SURU_SAFETY_REVERT_SECONDS` | — | `600` | Dead-man's-switch window (min 30) before the router auto-reverts to legacy if the deploy never disarms. |
 | `SURU_SKIP_HW_PREFLIGHT` | — | `false` | Skip hardware detection; deploy uses conservative built-in defaults (4 GB / 4-core profile). |

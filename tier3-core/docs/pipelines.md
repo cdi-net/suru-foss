@@ -223,3 +223,10 @@ Short version:
 7. Validate — ⚠️ **not** by `docker exec` into the live container (a 2nd JVM in its
    cgroup can OOM-crash production ingestion); use a throwaway container:
    `docker run --rm -e LS_JAVA_OPTS='-Xmx256m' -e OPENSEARCH_HOST=x -e OPENSEARCH_PORT=9200 -e OPENSEARCH_USER=x -e OPENSEARCH_PASSWORD=x -v "$PWD/NN-<source>.conf":/tmp/p.conf:ro docker.elastic.co/logstash/logstash-oss:9.3.1 logstash --config.test_and_exit -f /tmp/p.conf` (full command: `../config/logstash-pfsense/pipelines/README.md`)
+8. Idempotent ingest — every pipeline that writes to OpenSearch ends its
+   `filter {}` with the `fingerprint` block (`[@metadata][doc_fingerprint]` =
+   base64(SHA256(`message`))), routes `_fingerprint_missing_source` to
+   `quarantine-pipe`, and sets `document_id => "%{[@metadata][doc_fingerprint]}"`
+   on each `opensearch` output, so a re-read source log (byte-0 replay after a
+   reboot, a producer rewriting its log in place) upserts instead of duplicating.
+   Copy the block from `35-geoip.conf`.

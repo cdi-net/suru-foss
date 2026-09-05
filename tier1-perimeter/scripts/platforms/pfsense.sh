@@ -70,6 +70,7 @@ _PF_APPLIER_BACKUP="$(cd "${SCRIPT_DIR}/../../pfsense" && pwd)/backup-encrypt.ph
 _PF_APPLIER_RESTORE="$(cd "${SCRIPT_DIR}/../../pfsense" && pwd)/backup-restore.php"
 _PF_APPLIER_SURICATA_TUNING="$(cd "${SCRIPT_DIR}/../../pfsense" && pwd)/suricata-tuning-apply.php"
 _PF_APPLIER_SURICATA_DROP="$(cd "${SCRIPT_DIR}/../../pfsense" && pwd)/suricata-drop-policy-apply.php"
+_PF_APPLIER_SURICATA_LOGMGMT="$(cd "${SCRIPT_DIR}/../../pfsense" && pwd)/suricata-logmgmt-apply.php"
 _PF_APPLIER_SURICATA_SAFETY_REVERT="$(cd "${SCRIPT_DIR}/../../pfsense" && pwd)/suricata-safety-revert.php"
 _PF_APPLIER_PF_TUNING="$(cd "${SCRIPT_DIR}/../../pfsense" && pwd)/pf-tuning-apply.php"
 _PF_APPLIER_DNS_TUNING="$(cd "${SCRIPT_DIR}/../../pfsense" && pwd)/dns-tuning-apply.php"
@@ -823,6 +824,31 @@ EOPHP
     echo "[pfsense] Suricata tuning applied: profile=${_hw_suricata_profile} stream=${_hw_suricata_stream_memcap} reassembly=${_hw_suricata_reassembly_memcap} defrag=${_hw_suricata_defrag_memcap}"
   else
     echo "[pfsense] Skipping Suricata engine tuning (SURU_SURICATA_TUNING=false)"
+  fi
+
+  # --- Suricata log management (eve.json rotation) — incident-hardening --------
+  # Enables pfSense Suricata's built-in log-rotation cron and caps eve.json /
+  # http.log size + retention. Without this the master toggle enable_log_mgmt
+  # is unset and the rotation cron no-ops, letting eve.json grow unbounded
+  # (2026-07-03 incident: a 96 GB eve.json was replayed byte-0 by syslog-ng
+  # after a reboot, filling the SIEM disk). Global package setting, so this is
+  # a single write to installedpackages/suricata/config/0 (not per-interface).
+  # --run-now caps an already-oversized file on this deploy; no restart needed
+  # (the cron SIGHUPs Suricata itself on rotation). Skipped when
+  # SURU_SURICATA_LOG_MGMT=false (operator opt-out — leaves existing state).
+  if [[ "${SURU_SURICATA_LOG_MGMT:-true}" == "true" ]]; then
+    local _suri_eve_limit_kb="${SURICATA_EVE_LOG_LIMIT_KB:-500000}"
+    local _suri_http_limit_kb="${SURICATA_HTTP_LOG_LIMIT_KB:-500000}"
+    local _suri_log_retention_h="${SURICATA_LOG_RETENTION_HOURS:-24}"
+    for _v in "${_suri_eve_limit_kb}" "${_suri_http_limit_kb}" "${_suri_log_retention_h}"; do
+      [[ "${_v}" =~ ^[0-9]+$ ]] || log_die "SURICATA_*_LOG_* values must be integers, got: '${_v}'"
+    done
+    local pf_suri_logmgmt="${_PF_REMOTE_STAGING}/suricata-logmgmt-apply.php"
+    _pf_stage_and_install "${_PF_APPLIER_SURICATA_LOGMGMT}" "${pf_suri_logmgmt}"
+    _pf_remote_exec "${_SURISUDO}php ${pf_suri_logmgmt} --enable --eve-limit-kb=${_suri_eve_limit_kb} --http-limit-kb=${_suri_http_limit_kb} --retention-hours=${_suri_log_retention_h} --run-now"
+    echo "[pfsense] Suricata log management applied: eve/http limit=${_suri_eve_limit_kb}/${_suri_http_limit_kb} KB, retention=${_suri_log_retention_h}h"
+  else
+    echo "[pfsense] Skipping Suricata log management (SURU_SURICATA_LOG_MGMT=false — existing rotation state left as-is)"
   fi
 
   # --- Suricata inline-drop policy (alert->drop for CRITICAL categories) --------
