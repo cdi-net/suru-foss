@@ -38,6 +38,16 @@ docker run --rm -e LS_JAVA_OPTS='-Xmx256m' \
   docker.elastic.co/logstash/logstash-oss:9.3.1 logstash --config.test_and_exit -f /tmp/p.conf
 ```
 
+### Functional tests
+
+`--config.test_and_exit` proves a pipeline compiles, not what it computes. A
+`ruby { code => … }` block gets an executable test under `tests/` that
+extracts the block and runs it under plain ruby with a stub `event`:
+
+```bash
+bash tier3-core/config/logstash-pfsense/tests/test-40-pfblockerng-timestamp.sh   # pfBlockerNG event-time derivation, 9 fixtures
+```
+
 ## Notes
 
 - ECS version target: v8

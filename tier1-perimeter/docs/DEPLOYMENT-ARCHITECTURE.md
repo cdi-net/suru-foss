@@ -377,6 +377,7 @@ remote side as soon as the encrypt/decrypt step returns.
 | `_pf_deploy_zeek` | Push Zeek site policy, SOHO telemetry module, and zeekctl.cfg; `mkdir -p /var/log/zeek` |
 | `_pf_reload_services` | `pfSsh.php playback svc` for syslog-ng + zeek; `suricatasc -c reload-rules` for live rule hot-reload |
 | Suricata log-management stage (`SURU_SURICATA_LOG_MGMT`) | `suricata-logmgmt-apply.php` enables the Suricata package's Log Management cron (`enable_log_mgmt`, unset by default — without it `eve.json` never rotates) and caps `eve.json`/`http.log` size + retention; the cron rotates by rename + SIGHUP, so syslog-ng never re-reads a rotated copy |
+| pfBlockerNG log-rotation stage (`SURU_PFBLOCKERNG_LOG_ROTATION`) | Generates and installs `/var/etc/newsyslog.conf.d/suru-pfblockerng.conf` (rename-rotation of `dnsbl.log`/`ip_block.log` ahead of the pfBlockerNG cron), proven with a `newsyslog -nvf` dry run |
 
 ### Boot Persistence (syslog-ng, Zeek interface)
 
@@ -454,6 +455,36 @@ cron/shellcmd needed.
 
 ---
 
+### Log Rotation Contract and Persistence Classes
+
+Every file the platform tails must rotate **by rename**, through the mechanism
+that owns the file, enabled and sized by the platform by default — never an
+in-place rewrite. pfBlockerNG violates this: its cron's `tail -n N` + `mv -f`
+rewrite makes syslog-ng re-read ~40k lines every night, and the vendor's
+"No Limit" cap is unreachable (`pfb_filter` accepts digits only and returns
+the 20000 default), so the driver installs a pfSense-native `newsyslog`
+drop-in that rotates both block logs just before the cron hour.
+
+| Tailed log | Owner mechanism | Platform-enabled by |
+|---|---|---|
+| pfSense system logs | native `newsyslog` (`/var/etc/newsyslog.conf.d/pfSense.conf`) | pfSense default |
+| Suricata `eve.json` | package cron (rename + SIGHUP) | `suricata-logmgmt-apply.php` (log-management stage) |
+| Zeek `*.log` | `zeekctl cron` (`LogRotationInterval`) | deployed `zeekctl.cfg` |
+| pfBlockerNG `dnsbl.log` / `ip_block.log` | native `newsyslog` drop-in | log-rotation stage |
+
+Everything the driver changes on pfSense belongs to one persistence class:
+
+| Class | Mechanism | Examples | Durability |
+|---|---|---|---|
+| **A** | `config.xml` via PHP applier + native resync | syslog-ng objects, Suricata, Zeek interface, pfBlockerNG globals, unbound zones | reboot/upgrade/restore safe by construction |
+| **B** | file on disk via `_pf_stage_and_install` | certs, `zeekctl.cfg`, `node.cfg`, Zeek site scripts, Suricata rule files, the newsyslog drop-in | reboot-safe (persistent `/var`); re-converged every deploy; not in `config.xml` — a fresh box or a config restore needs `make deploy` |
+| **C** | native crons/state owned by pfSense or a package | `newsyslog`, package crons | toggled only through class A |
+
+Mechanism, evidence and verification: the stage comment in
+`scripts/platforms/pfsense.sh` (search "pfBlockerNG block-log rotation").
+
+---
+
 ## 9. OPNsense Driver Status
 
 `scripts/platforms/opnsense.sh` implements all five hooks as a scaffold.
@@ -516,6 +547,10 @@ All variables are defined in `.env` (copied from `.env.example`):
 | `SURICATA_IFACE` | — | — | **Deprecated** single-interface alias; honoured as fallback when `SURICATA_IFACES` is unset (physical NIC only). |
 | `ZEEK_IFACE` | — | `em0` | **Physical trunk interface** for Zeek (e.g. `igb1`, `em0`). Unlike Suricata, Zeek's interface is written directly into `local.zeek`/`node.cfg` — use the parent trunk, not a VLAN sub-interface. Zeek understands 802.1Q natively: one sensor on the trunk covers all VLANs. |
 | `ZEEK_MAILTO` | — | `root` | zeekctl alert email recipient; baked into rendered `zeekctl.cfg` |
+| `SURU_PFBLOCKERNG_LOG_ROTATION` | — | `true` | Install the newsyslog drop-in that rotates pfBlockerNG's `dnsbl.log`/`ip_block.log` by rename ahead of its cron |
+| `PFBLOCKERNG_LOG_ROTATE_TIME` | — | `@T2359` | Daily rotation time-of-day (`@Thhmm`); must precede the pfBlockerNG cron hour |
+| `PFBLOCKERNG_LOG_ROTATE_KB` | — | `10240` | Size backstop (KB) for the same rotation |
+| `PFBLOCKERNG_LOG_ROTATE_COUNT` | — | `7` | Archives kept per log (bzip2) |
 | `API_AUTH_MODE` | — | `api_key` | Router API auth mode: `api_key` (automation) \| `jwt` (short-lived, pfSense only) |
 | `API_TLS_VERIFY` | — | `yes` | Verify TLS on router API calls (`no` for self-signed; emits WARN) |
 | `API_CONNECT_TIMEOUT` | — | `30` | curl connect timeout for API calls |
