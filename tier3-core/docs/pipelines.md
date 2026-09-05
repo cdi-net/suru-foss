@@ -170,6 +170,19 @@ Two event formats are parsed — DNSBL (DNS blocklist hits) and IP reputation bl
 | `observer.type` | `firewall` | `firewall` |
 | `suru.tier` | `tier1` | `tier1` |
 
+**Timestamp:** both logs carry the event time without a year (`datereq` col 2 /
+`ts_human` col 1, router-local). `@timestamp` = that time + the year and UTC
+offset of the syslog-ng envelope `time` (year − 1 when the result is > 1 day
+ahead — Dec→Jan); lines older than the 30-day retention horizon are quarantined
+(`_replay_expired`). A re-read line (pfBlockerNG's nightly in-place log rewrite,
+a persist-file loss) therefore keeps its original day, index and deterministic
+`_id` and upserts. The envelope time is used only when the payload time is
+unparseable. `ip_block.log` col 2 is the alias-rebuild epoch — never the event
+time. **Functional test:**
+`bash config/logstash-pfsense/tests/test-40-pfblockerng-timestamp.sh` executes
+the `ruby` block under plain ruby against live-shaped fixtures
+(`--config.test_and_exit` only proves it compiles).
+
 **MITRE:** TA0011 Command and Control / T1071 Application Layer Protocol (DNS C2 blocked by DNSBL);
 TA0043 Reconnaissance / T1590 Gather Victim Network Information (recon source IP blocked by IP rep)
 
@@ -230,3 +243,7 @@ Short version:
    on each `opensearch` output, so a re-read source log (byte-0 replay after a
    reboot, a producer rewriting its log in place) upserts instead of duplicating.
    Copy the block from `35-geoip.conf`.
+9. A `ruby { code => … }` filter needs a **functional** test too — the grammar
+   check only compiles it. Pattern: `config/logstash-pfsense/tests/test-40-pfblockerng-timestamp.sh`
+   (extract the block, run it under plain ruby with a stub `event`, assert
+   against live-shaped fixtures).

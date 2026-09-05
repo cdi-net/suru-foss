@@ -1007,6 +1007,106 @@ EOPHP
     echo "[pfsense] Skipping unbound local-zones (SURU_UNBOUND_LOCALZONES=false)."
   fi
 
+  # --- pfBlockerNG block-log rotation (dnsbl.log / ip_block.log) ---------------
+  # pfBlockerNG has NO rename-based rotation for its block logs: its nightly
+  # cron ends with pfb_log_mgmt() (pfblockerng.inc), which rewrites each log
+  # IN PLACE — `tail -n <log_max_*> log > tmp; mv -f tmp log`. The inode swap
+  # makes syslog-ng's file() source re-read the whole retained tail from byte 0
+  # every night (~40k lines of already-shipped history), and the GUI's
+  # "No Limit" cap is unreachable — pfb_filter(PFB_FILTER_NUM) rejects the
+  # literal and returns the 20000 default — so the rewrite cannot be switched
+  # off. The platform therefore owns retention through pfSense's NATIVE
+  # newsyslog (runs every minute from /etc/crontab; the generated
+  # /etc/newsyslog.conf includes /var/etc/newsyslog.conf.d/*, where pfSense
+  # keeps manually added files): a drop-in rotates both logs by RENAME at a
+  # time-of-day just BEFORE the pfBlockerNG cron hour (default @T2359 vs the
+  # 00:00 cron), so the vendor rewrite only ever touches a ~1-minute file, and
+  # by size as a backstop. The SIEM pipeline restores each line's own event
+  # time (tier3-core/config/logstash-pfsense/pipelines/40-pfblockerng.conf),
+  # so any residual re-read keeps its original day and, with the pipeline's
+  # deterministic _id, UPSERTS instead of duplicating. Persistence class B: a
+  # file on persistent /var, re-converged on every deploy (like zeekctl.cfg).
+  # Flags: J = bzip2 (pfSense's own compression choice), B = no "logfile
+  # turned over" banner (it would land in Tier 3 as a _csvparsefailure doc).
+  # Both writers append per event by path (pfb_unbound.py log_entry: open(..,
+  # "a"); pfblockerng.inc: file_put_contents(.., FILE_APPEND)), so a rename
+  # loses nothing. Owners below are the live ones — dnsbl.log unbound:unbound
+  # 0600 (pfb_unbound_python() chowns it to unbound on every reload,
+  # pfblockerng.inc:2459-2466; the resolver's python hook writes as unbound),
+  # ip_block.log root:wheel 0600 (written by the root filterlog daemon; see
+  # also templates/pfsense/syslog-ng.conf.tpl) — newsyslog recreates each log
+  # with exactly these credentials after the rename. Skipped with
+  # SURU_PFBLOCKERNG_LOG_ROTATION=false (leaves existing state as-is).
+  if [[ "${SURU_PFBLOCKERNG_LOG_ROTATION:-true}" == "true" ]]; then
+    local _pfbrot_time="${PFBLOCKERNG_LOG_ROTATE_TIME:-@T2359}"
+    local _pfbrot_kb="${PFBLOCKERNG_LOG_ROTATE_KB:-10240}"
+    local _pfbrot_count="${PFBLOCKERNG_LOG_ROTATE_COUNT:-7}"
+    [[ "${_pfbrot_time}" =~ ^@T([01][0-9]|2[0-3])[0-5][0-9]$ ]] \
+      || log_die "PFBLOCKERNG_LOG_ROTATE_TIME must be a newsyslog daily time-of-day '@Thhmm', got: '${_pfbrot_time}'"
+    for _v in "${_pfbrot_kb}" "${_pfbrot_count}"; do
+      [[ "${_v}" =~ ^[0-9]+$ ]] || log_die "PFBLOCKERNG_LOG_ROTATE_KB / _COUNT must be integers, got: '${_v}'"
+    done
+    local tmp_pfbrot; tmp_pfbrot="$(mktemp)"
+    {
+      printf '# SURU Tier 1 — pfBlockerNG block-log rotation. Managed by deploy; do not edit.\n'
+      printf '# Rotates by RENAME just before the pfBlockerNG cron hour so its in-place log\n'
+      printf '# rewrite (pfb_log_mgmt) never re-feeds a full log to syslog-ng. B = no banner.\n'
+      printf '# logfilename\t\t\t\towner:group\tmode\tcount\tsize(KB)\twhen\tflags\n'
+      printf '/var/log/pfblockerng/dnsbl.log\t\tunbound:unbound\t600\t%s\t%s\t%s\tJB\n' "${_pfbrot_count}" "${_pfbrot_kb}" "${_pfbrot_time}"
+      printf '/var/log/pfblockerng/ip_block.log\troot:wheel\t600\t%s\t%s\t%s\tJB\n' "${_pfbrot_count}" "${_pfbrot_kb}" "${_pfbrot_time}"
+    } > "${tmp_pfbrot}"
+    local pf_pfbrot_remote="/var/etc/newsyslog.conf.d/suru-pfblockerng.conf"
+    _pf_stage_and_install "${tmp_pfbrot}" "${pf_pfbrot_remote}"
+    rm -f -- "${tmp_pfbrot}"
+    local _PRSUDO=""
+    [[ "${ssh_user}" != "root" ]] && _PRSUDO="sudo "
+    # The staged copy inherits mktemp's 0600; match pfSense's own generated
+    # files (644). Then PROVE the drop-in with a newsyslog dry run (-n never
+    # rotates or creates), judged LOCALLY on the captured output: newsyslog
+    # exits 0 on an illegal flag and on an unknown owner (it only prints an
+    # error line, and the owner error echoes the whole config line), so the
+    # exit status is no verdict and a path-only grep would match the echoed
+    # offending line. Require one registered decision line per log
+    # ("<path> <count flags>: …") and no error line. The literal fresh-install
+    # line "<path> <7J>: does not exist, skipped." (captured live) is a valid
+    # state, accepted explicitly — pfBlockerNG creates dnsbl.log on
+    # its first DNSBL sync (pfb_unbound_python() touch) and ip_block.log on
+    # the first block; newsyslog re-evaluates every minute and engages then.
+    # The files are deliberately NOT pre-created: the filterlog daemon parses
+    # the full filter.log backlog only when none of its logs exist yet
+    # (pfblockerng.inc:5429), and a pre-created file would change that.
+    _pf_remote_exec "${_PRSUDO}chmod 644 '${pf_pfbrot_remote}'"
+    if [[ "${dry_run}" != "true" ]]; then
+      local _pfbrot_out
+      _pfbrot_out="$(ssh "${ssh_opts[@]}" "${ssh_user}@${target}" "${_PRSUDO}newsyslog -nvf '${pf_pfbrot_remote}'" 2>&1 || true)"
+      local _pfbrot_bad=0 _pfbrot_log _pfbrot_re
+      grep -qiE 'error in config|illegal flag|missing field' <<< "${_pfbrot_out}" && _pfbrot_bad=1
+      for _pfbrot_log in /var/log/pfblockerng/dnsbl.log /var/log/pfblockerng/ip_block.log; do
+        # One registered decision line per log — either form, both captured
+        # live from this newsyslog (FreeBSD 15):
+        #   /var/log/pfblockerng/dnsbl.log <7J>: --> will trim at Sat Sep  5 23:59:00 2026
+        #   /var/log/pfblockerng/suru-probe-missing.log <7J>: does not exist, skipped.
+        # The fresh-install line is accepted by an explicit alternate, not by
+        # the accident of its "<path> <" prefix, so a newsyslog that words it
+        # differently still passes as long as it names the path.
+        _pfbrot_re="${_pfbrot_log//./\\.}"
+        grep -qE "^${_pfbrot_re} <|^${_pfbrot_re}.*does not exist, skipped" <<< "${_pfbrot_out}" || _pfbrot_bad=1
+      done
+      if [[ "${_pfbrot_bad}" -eq 1 ]]; then
+        echo "[pfsense] newsyslog dry-run output:" >&2
+        printf '%s\n' "${_pfbrot_out}" | sed 's/^/[pfsense]   /' >&2
+        _pf_remote_exec "${_PRSUDO}rm -f '${pf_pfbrot_remote}'" || true
+        log_die "pfBlockerNG log-rotation drop-in failed the newsyslog dry-run check — removed ${pf_pfbrot_remote}"
+      fi
+      if grep -q 'does not exist, skipped' <<< "${_pfbrot_out}"; then
+        echo "[pfsense] NOTE: a pfBlockerNG log does not exist yet (fresh install) — newsyslog has registered it and rotates it once pfBlockerNG creates it."
+      fi
+    fi
+    echo "[pfsense] pfBlockerNG log rotation installed: ${pf_pfbrot_remote} (daily at ${_pfbrot_time} or ${_pfbrot_kb} KB, keep ${_pfbrot_count}, rename + bzip2, no banner)"
+  else
+    echo "[pfsense] Skipping pfBlockerNG log rotation (SURU_PFBLOCKERNG_LOG_ROTATION=false — existing rotation state left as-is)"
+  fi
+
   # --- pfBlockerNG global baseline (master + DNSBL feature switches) ----------
   # Run BEFORE the feed importer so feeds land into a known-on configuration.
   # Conservative: only writes SURU-claimed keys; operator interface bindings
