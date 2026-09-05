@@ -178,10 +178,15 @@ ahead — Dec→Jan); lines older than the 30-day retention horizon are quaranti
 a persist-file loss) therefore keeps its original day, index and deterministic
 `_id` and upserts. The envelope time is used only when the payload time is
 unparseable. `ip_block.log` col 2 is the alias-rebuild epoch — never the event
-time. **Functional test:**
+time. **Functional tests:**
 `bash config/logstash-pfsense/tests/test-40-pfblockerng-timestamp.sh` executes
-the `ruby` block under plain ruby against live-shaped fixtures
-(`--config.test_and_exit` only proves it compiles).
+the `ruby` block under plain ruby against live-shaped fixtures, and
+`bash config/logstash-pfsense/tests/test-40-pfblockerng-pipeline.sh` runs the
+whole `filter {}` section in a throwaway `logstash-oss` container (stdin →
+stdout `json_lines`) so filter ORDER is proven too — the DNSBL `datereq`
+scratch field was once removed before it was copied into the timestamp block,
+a silent no-op that sent every dnsbl.log event back to the envelope time.
+`--config.test_and_exit` only proves the file compiles.
 
 **MITRE:** TA0011 Command and Control / T1071 Application Layer Protocol (DNS C2 blocked by DNSBL);
 TA0043 Reconnaissance / T1590 Gather Victim Network Information (recon source IP blocked by IP rep)
@@ -244,6 +249,9 @@ Short version:
    reboot, a producer rewriting its log in place) upserts instead of duplicating.
    Copy the block from `35-geoip.conf`.
 9. A `ruby { code => … }` filter needs a **functional** test too — the grammar
-   check only compiles it. Pattern: `config/logstash-pfsense/tests/test-40-pfblockerng-timestamp.sh`
+   check only compiles it. Patterns: `config/logstash-pfsense/tests/test-40-pfblockerng-timestamp.sh`
    (extract the block, run it under plain ruby with a stub `event`, assert
-   against live-shaped fixtures).
+   against live-shaped fixtures) and `test-40-pfblockerng-pipeline.sh` (swap
+   the input/output blocks for stdin/stdout `json_lines`, run the real
+   `filter {}` in a throwaway `logstash-oss` container, assert the emitted
+   documents — the one that catches filter-ORDER bugs).
