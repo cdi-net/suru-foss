@@ -42,10 +42,15 @@ docker run --rm -e LS_JAVA_OPTS='-Xmx256m' \
 
 `--config.test_and_exit` proves a pipeline compiles, not what it computes. A
 `ruby { code => … }` block gets an executable test under `tests/` that
-extracts the block and runs it under plain ruby with a stub `event`:
+extracts the block and runs it under plain ruby with a stub `event`, and the
+pipeline as a whole gets one that runs its real `filter {}` section in a
+throwaway `logstash-oss` container (stdin → stdout `json_lines`) — the only
+kind of test that sees filter ORDER (a scratch field removed before it is
+copied is a silent no-op the block-level test cannot detect):
 
 ```bash
-bash tier3-core/config/logstash-pfsense/tests/test-40-pfblockerng-timestamp.sh   # pfBlockerNG event-time derivation, 9 fixtures
+bash tier3-core/config/logstash-pfsense/tests/test-40-pfblockerng-timestamp.sh   # pfBlockerNG event-time derivation, 9 fixtures (plain ruby)
+bash tier3-core/config/logstash-pfsense/tests/test-40-pfblockerng-pipeline.sh    # whole pfBlockerNG filter section, 8 fixtures (docker)
 ```
 
 ## Notes
