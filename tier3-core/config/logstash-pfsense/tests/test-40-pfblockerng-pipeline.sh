@@ -71,9 +71,14 @@ fixture() { # case program envelope-time message
 } > "${TMP_DIR}/fixtures.jsonl"
 
 echo "── logstash pipeline run (${IMAGE##*/}) ──"
+# Heap: tier3-core/ingestion/logstash/compose.yaml documents a 1g floor for
+# this image (a 512m heap OOM-looped live 2026-07-08 during the entrypoint's
+# plugin install). This run skips that entrypoint and loads a single pipeline,
+# but the documented floor is kept rather than argued away — it costs nothing
+# on a throwaway container.
 rc=0
 docker run --rm -i \
-  -e LS_JAVA_OPTS='-Xms256m -Xmx256m' \
+  -e LS_JAVA_OPTS='-Xms1g -Xmx1g' \
   -v "${TMP_DIR}/pipeline.conf":/tmp/p.conf:ro \
   "${IMAGE}" \
   logstash -f /tmp/p.conf --path.data /tmp/lsdata --log.level warn --pipeline.workers 1 \
