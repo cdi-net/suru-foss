@@ -527,6 +527,54 @@ EOPHP
     fi
   }
 
+  # _pf_newsyslog_dropin_path NAME — the one place the drop-in path convention
+  # lives (/var/etc/newsyslog.conf.d/NAME.conf); the installer and the stage
+  # messages derive it from here so they cannot drift apart.
+  _pf_newsyslog_dropin_path() { printf '/var/etc/newsyslog.conf.d/%s.conf' "$1"; }
+
+  # _pf_install_newsyslog_dropin NAME LOCAL_CONF LOGPATH...
+  # Installs LOCAL_CONF as /var/etc/newsyslog.conf.d/NAME.conf (pfSense's
+  # generated /etc/newsyslog.conf includes that directory) and PROVES it with a
+  # newsyslog dry run (-n never rotates or creates), judged LOCALLY on the
+  # captured output: newsyslog exits 0 on an illegal flag and on an unknown
+  # owner (it only prints an error line, and the owner error echoes the whole
+  # config line), so the exit status is no verdict and a path-only grep would
+  # match the echoed offending line. Require one registered decision line per
+  # LOGPATH ("<path> <count flags>: …") and no error line. The literal
+  # fresh-install line "<path> <7J>: does not exist, skipped." (captured live)
+  # is a valid state, accepted explicitly — newsyslog re-evaluates every
+  # minute and engages once the producer creates the file. A failed verdict
+  # removes the drop-in again (a bad line would otherwise be retried every
+  # minute) and the deploy dies. Rotate-by-rename contract: see
+  # docs/DEPLOYMENT-ARCHITECTURE.md "Log Rotation Contract".
+  _pf_install_newsyslog_dropin() {
+    local name="$1" local_conf="$2"; shift 2
+    local remote; remote="$(_pf_newsyslog_dropin_path "${name}")"
+    _pf_stage_and_install "${local_conf}" "${remote}"
+    local _NSUDO=""
+    [[ "${ssh_user}" != "root" ]] && _NSUDO="sudo "
+    # The staged copy inherits mktemp's 0600; match pfSense's own generated files (644).
+    _pf_remote_exec "${_NSUDO}chmod 644 '${remote}'"
+    if [[ "${dry_run}" != "true" ]]; then
+      local _ns_out _ns_bad=0 _ns_log _ns_re
+      _ns_out="$(ssh "${ssh_opts[@]}" "${ssh_user}@${target}" "${_NSUDO}newsyslog -nvf '${remote}'" 2>&1 || true)"
+      grep -qiE 'error in config|illegal flag|missing field' <<< "${_ns_out}" && _ns_bad=1
+      for _ns_log in "$@"; do
+        _ns_re="${_ns_log//./\\.}"
+        grep -qE "^${_ns_re} <|^${_ns_re}.*does not exist, skipped" <<< "${_ns_out}" || _ns_bad=1
+      done
+      if [[ "${_ns_bad}" -eq 1 ]]; then
+        echo "[pfsense] newsyslog dry-run output for ${remote}:" >&2
+        printf '%s\n' "${_ns_out}" | sed 's/^/[pfsense]   /' >&2
+        _pf_remote_exec "${_NSUDO}rm -f -- '${remote}'" || true
+        log_die "newsyslog drop-in ${name} failed the dry-run check — removed ${remote}"
+      fi
+      if grep -q 'does not exist, skipped' <<< "${_ns_out}"; then
+        echo "[pfsense] NOTE: a log named in ${remote} does not exist yet — newsyslog has registered it and rotates it once its producer creates it."
+      fi
+    fi
+  }
+
   # _pf_stage_and_install_dir LOCAL_SRC_DIR REMOTE_DST_DIR
   # SCP directory to staging, then move each file into protected destination.
   _pf_stage_and_install_dir() {
@@ -1035,7 +1083,11 @@ EOPHP
   # pfblockerng.inc:2459-2466; the resolver's python hook writes as unbound),
   # ip_block.log root:wheel 0600 (written by the root filterlog daemon; see
   # also templates/pfsense/syslog-ng.conf.tpl) — newsyslog recreates each log
-  # with exactly these credentials after the rename. Skipped with
+  # with exactly these credentials after the rename. The files are deliberately
+  # NOT pre-created: the filterlog daemon parses the full filter.log backlog
+  # only when none of its logs exist yet (pfblockerng.inc:5429), and a
+  # pre-created file would change that. Install + dry-run proof:
+  # _pf_install_newsyslog_dropin. Skipped with
   # SURU_PFBLOCKERNG_LOG_ROTATION=false (leaves existing state as-is).
   if [[ "${SURU_PFBLOCKERNG_LOG_ROTATION:-true}" == "true" ]]; then
     local _pfbrot_time="${PFBLOCKERNG_LOG_ROTATE_TIME:-@T2359}"
@@ -1055,53 +1107,9 @@ EOPHP
       printf '/var/log/pfblockerng/dnsbl.log\t\tunbound:unbound\t600\t%s\t%s\t%s\tJB\n' "${_pfbrot_count}" "${_pfbrot_kb}" "${_pfbrot_time}"
       printf '/var/log/pfblockerng/ip_block.log\troot:wheel\t600\t%s\t%s\t%s\tJB\n' "${_pfbrot_count}" "${_pfbrot_kb}" "${_pfbrot_time}"
     } > "${tmp_pfbrot}"
-    local pf_pfbrot_remote="/var/etc/newsyslog.conf.d/suru-pfblockerng.conf"
-    _pf_stage_and_install "${tmp_pfbrot}" "${pf_pfbrot_remote}"
+    _pf_install_newsyslog_dropin suru-pfblockerng "${tmp_pfbrot}" /var/log/pfblockerng/dnsbl.log /var/log/pfblockerng/ip_block.log
     rm -f -- "${tmp_pfbrot}"
-    local _PRSUDO=""
-    [[ "${ssh_user}" != "root" ]] && _PRSUDO="sudo "
-    # The staged copy inherits mktemp's 0600; match pfSense's own generated
-    # files (644). Then PROVE the drop-in with a newsyslog dry run (-n never
-    # rotates or creates), judged LOCALLY on the captured output: newsyslog
-    # exits 0 on an illegal flag and on an unknown owner (it only prints an
-    # error line, and the owner error echoes the whole config line), so the
-    # exit status is no verdict and a path-only grep would match the echoed
-    # offending line. Require one registered decision line per log
-    # ("<path> <count flags>: …") and no error line. The literal fresh-install
-    # line "<path> <7J>: does not exist, skipped." (captured live) is a valid
-    # state, accepted explicitly — pfBlockerNG creates dnsbl.log on
-    # its first DNSBL sync (pfb_unbound_python() touch) and ip_block.log on
-    # the first block; newsyslog re-evaluates every minute and engages then.
-    # The files are deliberately NOT pre-created: the filterlog daemon parses
-    # the full filter.log backlog only when none of its logs exist yet
-    # (pfblockerng.inc:5429), and a pre-created file would change that.
-    _pf_remote_exec "${_PRSUDO}chmod 644 '${pf_pfbrot_remote}'"
-    if [[ "${dry_run}" != "true" ]]; then
-      local _pfbrot_out
-      _pfbrot_out="$(ssh "${ssh_opts[@]}" "${ssh_user}@${target}" "${_PRSUDO}newsyslog -nvf '${pf_pfbrot_remote}'" 2>&1 || true)"
-      local _pfbrot_bad=0 _pfbrot_log _pfbrot_re
-      grep -qiE 'error in config|illegal flag|missing field' <<< "${_pfbrot_out}" && _pfbrot_bad=1
-      for _pfbrot_log in /var/log/pfblockerng/dnsbl.log /var/log/pfblockerng/ip_block.log; do
-        # One registered decision line per log — either form, both captured
-        # live from this newsyslog (FreeBSD 15):
-        #   /var/log/pfblockerng/dnsbl.log <7J>: --> will trim at Sat Sep  5 23:59:00 2026
-        #   /var/log/pfblockerng/suru-probe-missing.log <7J>: does not exist, skipped.
-        # The fresh-install line is accepted by an explicit alternate, not by
-        # the accident of its "<path> <" prefix, so a newsyslog that words it
-        # differently still passes as long as it names the path.
-        _pfbrot_re="${_pfbrot_log//./\\.}"
-        grep -qE "^${_pfbrot_re} <|^${_pfbrot_re}.*does not exist, skipped" <<< "${_pfbrot_out}" || _pfbrot_bad=1
-      done
-      if [[ "${_pfbrot_bad}" -eq 1 ]]; then
-        echo "[pfsense] newsyslog dry-run output:" >&2
-        printf '%s\n' "${_pfbrot_out}" | sed 's/^/[pfsense]   /' >&2
-        _pf_remote_exec "${_PRSUDO}rm -f '${pf_pfbrot_remote}'" || true
-        log_die "pfBlockerNG log-rotation drop-in failed the newsyslog dry-run check — removed ${pf_pfbrot_remote}"
-      fi
-      if grep -q 'does not exist, skipped' <<< "${_pfbrot_out}"; then
-        echo "[pfsense] NOTE: a pfBlockerNG log does not exist yet (fresh install) — newsyslog has registered it and rotates it once pfBlockerNG creates it."
-      fi
-    fi
+    local pf_pfbrot_remote; pf_pfbrot_remote="$(_pf_newsyslog_dropin_path suru-pfblockerng)"
     echo "[pfsense] pfBlockerNG log rotation installed: ${pf_pfbrot_remote} (daily at ${_pfbrot_time} or ${_pfbrot_kb} KB, keep ${_pfbrot_count}, rename + bzip2, no banner)"
   else
     echo "[pfsense] Skipping pfBlockerNG log rotation (SURU_PFBLOCKERNG_LOG_ROTATION=false — existing rotation state left as-is)"
