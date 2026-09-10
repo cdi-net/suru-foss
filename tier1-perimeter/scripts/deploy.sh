@@ -52,8 +52,17 @@ VERBOSE=false
 PLATFORM=""
 TARGET="${ROUTER_HOST:-}"
 
+# Bash has a single EXIT trap and each install REPLACES the last: lib/api.sh
+# arms `trap _api_cleanup_tmp EXIT` on its FIRST source above, this replaces it,
+# and the pfSense driver's staging cleanup later replaces this one. Every link
+# chains the one it replaced, so lib/api.sh's 0600 temp files are always removed.
+# As a bare no-op, this hook silently leaked them on every run through deploy.sh.
+# The driver sources the lib a second time; that arm is guarded, so the
+# re-source cannot reset the trap and discard this chain.
 trap '_deploy_cleanup' EXIT
-_deploy_cleanup() { : ; }
+_deploy_cleanup() {
+  declare -f _api_cleanup_tmp > /dev/null 2>&1 && _api_cleanup_tmp || true
+}
 
 _log()  { echo "[deploy] $*"; }
 _vlog() { ${VERBOSE} && echo "[deploy:verbose] $*" || true; }

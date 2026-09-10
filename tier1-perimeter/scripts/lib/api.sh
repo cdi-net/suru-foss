@@ -126,8 +126,47 @@ _PF_JWT_TOKEN=""
 _PF_JWT_EXPIRES_EPOCH=0
 _PF_JWT_REFRESH_BUFFER=60   # refresh if <60s remain on JWT
 
-# Track temp files for trap-based cleanup as a safety net
-_API_TMPFILES=()
+# Per-process secure temp DIRECTORY — the trap-based cleanup safety net.
+#
+# This was an array of tracked file paths, appended inside _api_mktemp_secure.
+# It could never work: every call site reads the path back with command
+# substitution (`hdrfile="$(_api_mktemp_secure)"`), which runs the function in a
+# SUBSHELL, so the append mutated a copy and the parent's array stayed empty
+# forever — _api_cleanup_tmp's `(( ${#_API_TMPFILES[@]} > 0 ))` guard was never
+# once true. A directory whose path is fixed at source time needs no
+# cross-subshell bookkeeping: children inherit it and cleanup removes the tree.
+#
+# It matters because the safety net covers the window the inline `rm -f` cannot:
+# an abort between creating the request body and removing it leaves a 0600 file
+# containing the router API password (see the JWT login body below).
+#
+# Created eagerly here, in the parent shell, for that reason. /dev/shm (tmpfs,
+# RAM-only) is preferred so the contents never touch disk. The creation is
+# idempotent: this lib is sourced TWICE per deploy — once by deploy.sh, then
+# again by the platform driver it sources — and without the guard the second
+# source would overwrite _API_TMPDIR and orphan the first directory.
+_api_tmp_base="${TMPDIR:-/tmp}"
+[[ -d /dev/shm && -w /dev/shm ]] && _api_tmp_base=/dev/shm
+if [[ -z "${_API_TMPDIR:-}" || ! -d "${_API_TMPDIR:-}" ]]; then
+  _API_TMPDIR="$(mktemp -d "${_api_tmp_base%/}/suru-api.XXXXXXXX")" \
+    || { echo "[api] FATAL: cannot create secure temp dir under ${_api_tmp_base}" >&2; return 1 2>/dev/null || exit 1; }
+  chmod 700 "${_API_TMPDIR}"
+  # The EXIT trap is armed HERE, inside the guard, and NOT as an unconditional
+  # statement at file scope. deploy.sh installs its own chained trap between the
+  # two sources; an unconditional re-arm on the second source silently reset the
+  # trap to this function alone and discarded that chain.
+  #
+  # Known limitation, unreachable on today's call paths: _api_cleanup_tmp is also
+  # callable on demand. A re-source after such a call finds no directory, so the
+  # guard opens and the trap is re-armed, clobbering a caller's chain by the same
+  # mechanism. Gating the arm on a separate "already armed" flag does NOT fix it —
+  # that leaves the re-created directory with no trap at all, which leaks. Closing
+  # it properly needs the arm to depend on whether a trap is currently installed,
+  # and `trap -p EXIT` output is not worth parsing across bash 3.2 and 5. No
+  # caller invokes _api_cleanup_tmp before re-sourcing, so the path is dead today.
+  trap _api_cleanup_tmp EXIT
+fi
+unset _api_tmp_base
 
 # ---------------------------------------------------------------------------
 # api_init
@@ -182,30 +221,36 @@ api_init() {
 
 # ---------------------------------------------------------------------------
 # _api_mktemp_secure → echoes path to a fresh 0600 file.
-# Prefers /dev/shm (tmpfs, RAM-only) on Linux; falls back to $TMPDIR or /tmp.
+# The file lands in _API_TMPDIR (created at source time above): /dev/shm when
+# available — tmpfs, RAM-only — else $TMPDIR or /tmp.
 # ---------------------------------------------------------------------------
 _api_mktemp_secure() {
-  local tmpdir="${TMPDIR:-/tmp}"
-  [[ -d /dev/shm && -w /dev/shm ]] && tmpdir=/dev/shm
+  # Inside _API_TMPDIR so the EXIT-trap cleanup reaches it without needing this
+  # function to record anything — it is always called in a command-substitution
+  # subshell, where any bookkeeping it did would be discarded.
+  [[ -n "${_API_TMPDIR:-}" && -d "${_API_TMPDIR}" ]] || return 1
   local f
-  f="$(mktemp "${tmpdir}/suru-api.XXXXXXXX")" || return 1
+  f="$(mktemp "${_API_TMPDIR}/f.XXXXXXXX")" || return 1
   chmod 600 "${f}" || { rm -f "${f}"; return 1; }
-  _API_TMPFILES+=("${f}")
   echo "${f}"
 }
 
-# Clean up any tracked temp files (called on EXIT and on demand).
-# Safe under `set -u`: only iterates if the array has at least one element.
+# Remove the per-process temp dir and everything in it (called on EXIT and on
+# demand). Safe under `set -u`, and idempotent — a second call is a no-op.
+# The `suru-api.` basename check is a guard on the recursive remove: it refuses
+# to act on a path this library did not create.
+#
+# The EXIT trap that runs this is armed ABOVE, inside the _API_TMPDIR guard —
+# not here. See the comment there for why.
 _api_cleanup_tmp() {
-  if (( ${#_API_TMPFILES[@]} > 0 )); then
-    local f
-    for f in "${_API_TMPFILES[@]}"; do
-      [[ -n "${f}" && -f "${f}" ]] && rm -f "${f}"
-    done
-    _API_TMPFILES=()
-  fi
+  local d="${_API_TMPDIR:-}"
+  [[ -n "${d}" && -d "${d}" ]] || return 0
+  case "$(basename -- "${d}")" in
+    suru-api.????????) rm -rf -- "${d}" ;;
+    *) echo "[api] WARN: refusing to remove unexpected temp dir: ${d}" >&2 ;;
+  esac
+  return 0
 }
-trap _api_cleanup_tmp EXIT
 
 # ---------------------------------------------------------------------------
 # _api_curl_base_opts — flags that are safe to pass on argv (no secrets)

@@ -95,6 +95,26 @@ _PF_REMOTE_ZEEK_INTEL_DIR="/usr/local/share/zeek/intel"
 # Remote staging directory — writable by admin, cleaned up after deploy
 _PF_REMOTE_STAGING="/tmp/suru-staging"
 
+# --- EXIT-trap snapshot -------------------------------------------------------
+# Bash keeps a function's locals visible to an EXIT trap only while that function
+# is still on the call stack. The staging-cleanup trap below is armed inside
+# _platform_deploy but fires at *global* scope on the abort paths that `return`
+# out of it — the pre-deploy backup gate and the inline-flip safety-timer refusal
+# — where the locals are gone and reading them aborted the trap under `set -u`
+# ("dry_run: unbound variable"). That skipped the cleanup on exactly the paths
+# that leave a half-staged directory behind. The trap therefore reads this
+# snapshot and never a local. Pre-initialised so every reference is bound however
+# early the script exits; dry-run defaults true and the target defaults empty, so
+# a trap that fires before the snapshot is populated does nothing rather than
+# SSHing blind.
+_PF_TRAP_DRY_RUN="true"
+_PF_TRAP_SSH_USER=""
+_PF_TRAP_TARGET=""
+_PF_TRAP_SSH_OPTS=()
+# Success path sets this: the staging dir is deliberately left on the router,
+# while the trap stays armed for its chained temp-file cleanup.
+_PF_TRAP_STAGING_KEEP="false"
+
 _platform_deploy() {
   local target="$1" rendered="$2" dry_run="$3"
   local ssh_key="${ROUTER_SSH_KEY:-~/.ssh/suru_deploy}"
@@ -642,12 +662,33 @@ EOPHP
   fi
   # Cleanup staging dir on script exit (best-effort — does not fail deploy).
   # Also wipes any leftover password file from the backup/revert hooks.
-  trap '_pf_cleanup_staging' EXIT
+  #
+  # Reads ONLY the _PF_TRAP_* snapshot — never this function's locals, which are
+  # out of scope when the trap fires after a `return`. The empty-target /
+  # empty-opts guards are load-bearing under bash 3.2, where "${arr[@]}" on an
+  # empty array is itself an unbound-variable error with `set -u`.
+  #
+  # Chains _deploy_cleanup because bash has a single EXIT trap and each install
+  # REPLACES the last: lib/api.sh arms `trap _api_cleanup_tmp EXIT` on its first
+  # source, deploy.sh replaces it, and this replaces that. Unchained, lib/api.sh's
+  # 0600 temp files survived every run through deploy.sh. Guarded with `declare -f`
+  # so the driver still cleans up when sourced standalone by a test.
   _pf_cleanup_staging() {
-    if [[ "${dry_run}" != "true" ]]; then
-      ssh "${ssh_opts[@]}" "${ssh_user}@${target}" "rm -rf ${_PF_REMOTE_STAGING}" 2>/dev/null || true
+    if [[ "${_PF_TRAP_STAGING_KEEP}" != "true" \
+       && "${_PF_TRAP_DRY_RUN}" != "true" \
+       && -n "${_PF_TRAP_TARGET}" \
+       && ${#_PF_TRAP_SSH_OPTS[@]} -gt 0 ]]; then
+      ssh "${_PF_TRAP_SSH_OPTS[@]}" "${_PF_TRAP_SSH_USER}@${_PF_TRAP_TARGET}" \
+        "rm -rf ${_PF_REMOTE_STAGING}" 2>/dev/null || true
     fi
+    declare -f _deploy_cleanup > /dev/null 2>&1 && _deploy_cleanup || true
   }
+  _PF_TRAP_DRY_RUN="${dry_run}"
+  _PF_TRAP_SSH_USER="${ssh_user}"
+  _PF_TRAP_TARGET="${target}"
+  _PF_TRAP_SSH_OPTS=("${ssh_opts[@]}")
+  _PF_TRAP_STAGING_KEEP="false"
+  trap '_pf_cleanup_staging' EXIT
 
   # --- Encrypted pre-deploy backup -------------------------------------------
   # MUST succeed before any deploy step mutates /conf/config.xml. On any
@@ -1210,7 +1251,10 @@ EOPHP
   if [[ -n "${_pfb_abuseipdb_key}" && "${dry_run}" != "true" ]]; then
     _pf_remote_exec "${_PBSUDO}rm -f '${pf_importer_remote}'"
   fi
-  trap - EXIT
+  # Deploy succeeded — leave the staging dir on the router, but keep the EXIT
+  # trap ARMED so its chained temp-file cleanup still runs. Disarming it
+  # outright also skipped that, leaking lib/api.sh's 0600 temp files.
+  _PF_TRAP_STAGING_KEEP="true"
   # Deploy succeeded — disarm the auto-revert trap so a failure in the
   # purely-informational verify/validate blocks below doesn't roll us back.
   trap - ERR
