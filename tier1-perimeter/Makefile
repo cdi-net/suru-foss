@@ -85,6 +85,7 @@ clean:
 
 test:
 	@bash $(TESTS) $(if $(filter true,$(VERBOSE)),--verbose,)
+	@bash $(REPO_ROOT)/tier1-perimeter/scripts/lib/tests/test-exit-trap-cleanup.sh
 
 # ---------------------------------------------------------------------------
 # REST API targets — source lib/api.sh and dispatch on ROUTER_PLATFORM

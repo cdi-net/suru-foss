@@ -356,6 +356,50 @@ _pf_revert / _opn_revert (on ERR):
   pre-deploy known-good config.
 ```
 
+### EXIT-Trap Cleanup Chain
+
+Bash keeps exactly **one** EXIT trap: every `trap ... EXIT` replaces the
+previous one. Three places install one during a deploy, in this order:
+
+```
+lib/api.sh      trap _api_cleanup_tmp EXIT      # on its FIRST source, inside the
+                                                # _API_TMPDIR guard
+deploy.sh       trap '_deploy_cleanup' EXIT     # chains _api_cleanup_tmp
+pfsense.sh      trap '_pf_cleanup_staging' EXIT # chains _deploy_cleanup
+```
+
+Two rules follow, and both are load-bearing:
+
+1. **Every link chains the one it replaced.** A link that does not is not
+   "last one wins" — it silently discards the cleanup the previous link was
+   installed to perform. `lib/api.sh`'s temp files hold the router API
+   password mid-request, so dropping its cleanup leaves a 0600 credential
+   file behind on any abort between writing the request body and the inline
+   `rm -f`.
+
+2. **`lib/api.sh` arms its trap only on first source, guarded.** The lib is
+   sourced twice per deploy — once by `deploy.sh`, then again by the platform
+   driver `deploy.sh` sources. `deploy.sh` installs its own chained trap
+   between the two, so an unconditional re-arm on the second source would
+   reset the trap to `_api_cleanup_tmp` alone and discard that chain.
+
+A further constraint applies to the trap **bodies**: bash keeps a function's
+locals visible to an EXIT trap only while that function is still on the call
+stack. `_pf_cleanup_staging` is defined inside `_platform_deploy` but fires at
+**global** scope on the paths that `return` out of it — the pre-deploy backup
+gate and the inline-flip safety-timer refusal. It therefore reads a
+script-scope `_PF_TRAP_*` snapshot, populated immediately before the trap is
+armed, and never a local. Reading a local there fails under `set -u` with
+`dry_run: unbound variable`, on exactly the abort paths that leave a
+half-staged directory behind.
+
+On the success path the EXIT trap is **not** disarmed. It stays armed with
+`_PF_TRAP_STAGING_KEEP=true`: the staging directory is deliberately left on
+the router, while the chained temp-file cleanup still runs.
+
+`scripts/lib/tests/test-exit-trap-cleanup.sh` guards all of the above,
+executing the shipped trap body at global scope with `ssh` stubbed.
+
 **Manual recovery options when the auto-revert itself fails:**
 - pfSense GUI: Diagnostics → Backup & Restore → Restore Configuration
   (check "Encrypted"), upload the local `.bak`, supply the password.
