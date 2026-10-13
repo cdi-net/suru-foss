@@ -19,6 +19,11 @@ description: |
   tunneling or C2 over DNS, raised by the SURU custom Zeek detection script
   (suru-dns-entropy.zeek) via the Notice framework and surfaced in ECS as
   event.dataset:"notice" with rule.name = SURU_DNS::DNS_High_Entropy_Query.
+  The underlying Zeek leg evaluates only unicast port-53 traffic, excludes
+  local namespaces and DNS-SD service-discovery names (same scoping the
+  companion length leg already had), and raises its entropy threshold from
+  3.8 to 4.0 bits/char — see falsepositives below for what that
+  scoping/threshold change resolves and what it leaves undetected.
 author: SURU Platform / SURU Detection Engineering
 date: 2026/05/01
 modified: 2026/06/24
@@ -37,4 +42,22 @@ detection:
 falsepositives:
   - DNSSEC signed zones with long labels
   - Legitimate CDN domains with hash-encoded subdomains
+  - "RESOLVED 2026-10-08: mDNS/5353 DNS-SD service-instance names (e.g. a
+    neutral device._service._tcp.local) and .invalid probe names were the
+    two largest false-positive classes observed (281/400 and 15/400 of a
+    7-day sampled population) — now excluded at source in
+    suru-dns-entropy.zeek via the same unicast/local-namespace/DNS-SD
+    scoping the companion length leg already had"
+  - "ACCEPTED BLIND SPOT 2026-10-08: the .invalid exclusion above is a net
+    risk trade, not a pure fix — one-way, query-only exfiltration sent
+    straight to an attacker-run server on port 53 under .invalid bypasses
+    both Zeek legs; removing .invalid from local_suffixes via &redef
+    restores both legs for it"
+  - "ACCEPTED BLIND SPOT 2026-10-08: the entropy threshold raised 3.8 -> 4.0
+    means a hex-encoded tunnel label (16-symbol alphabet, max possible
+    entropy exactly 4.0 bits/char) fires only when its digit distribution
+    is exactly uniform (the Zeek comparison is >=), so this rule is
+    effectively blind to it — base32/base64-encoded tunnels remain above
+    4.0 and are still caught; the companion length leg
+    (dns-excessive-name-length.yml) remains the backstop"
 level: high

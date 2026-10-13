@@ -18,7 +18,8 @@ id: 7b4e3f2a-0021-4c6d-9e0f-b2c3d4e5f6c9
 status: experimental
 description: |
   Detects unicast DNS queries whose full query name is at or above the
-  suru-dns-entropy.zeek length threshold (default 100 chars) after excluding
+  suru-dns-entropy.zeek length threshold (default 130 chars, raised from
+  100 on 2026-10-08 — see falsepositives below) after excluding
   multicast/service-discovery namespaces. Legitimate FQDNs rarely exceed
   ~80 characters while iodine/dns2tcp-class tunnels pack labels toward the
   255-byte protocol ceiling. Raised by SURU's custom Zeek detection via the
@@ -45,4 +46,16 @@ falsepositives:
   - DNSSEC/DKIM-style TXT lookups with very long owner names
   - Antivirus/security products encoding telemetry into DNS labels
     (extend the exclusion set in zeek/scripts/suru-dns-entropy.zeek)
+  - "RESOLVED 2026-10-08: the threshold was raised 100 -> 130 chars after a
+    7-day sample showed all 244 notices in the window (118-126 chars, from
+    2 source hosts) were a single SaaS/collaboration vendor's
+    partition-style subdomain names under one cloud vendor's domain
+    (neutral form: long-cdn-label-abc123.vendor.example) — none reached
+    130. iodine/dns2tcp-class tunnels still pack toward the 255-byte
+    protocol ceiling and remain well in scope"
+  - "ACCEPTED BLIND SPOT 2026-10-08: this leg shares the .invalid exclusion
+    in local_suffixes with the entropy leg — one-way, query-only
+    exfiltration sent straight to an attacker-run server on port 53 under
+    .invalid is not scored by either leg; removing .invalid from
+    local_suffixes via &redef restores both legs for it"
 level: high

@@ -66,14 +66,23 @@ rules:
 
   - rule_id: "8ae51330-899c-4641-8125-e39f2e07da72"
     title: "DNS TXT Answer with Possible Execution Strings"
-    enabled: true
+    enabled: false
+    disabled_reason: >
+      DISABLED 2026-10-12: Zeek's dns.log Info record logs 'answers' as a
+      vector of string and 'TTLs' as a vector of interval, with NO per-answer
+      RR type (base/protocols/dns/main.zeek) — sample shape:
+      "dns":{"resolved":["203.0.113.10"]}, "TTLs":[188.0]. 'dns.answers.type'
+      can therefore never be populated from this source; deriving it from
+      dns.question.type would also be wrong for a CNAME-chain answer.
+      Re-enable only if Suricata EVE dns logging with per-answer rrtype is
+      enabled and mapped — never via a dns.question.type heuristic.
     level: high
-    field_available: false     # dns.answers.type / 'answer' NOT in zeek index
+    field_available: false     # dns.answers.type has no source on this log; see disabled_reason
     field_mapping_note: >
-      Rule queries 'dns.answers.type' and 'answer' fields. Zeek index has 'dns.rrtype'
-      (answer record type) and 'dns.resolved' (answer content). SA alias field mappings
-      dns.answers.type→dns.rrtype and answer→dns.resolved must be registered via
-      _plugins/_security_analytics/mappings before this rule will fire.
+      Rule queries 'dns.answers.type' and 'answer'. Zeek's dns.log carries no
+      per-answer RR type at all (answers is a bare string vector) — there is
+      no ECS field this rule's 'dns.answers.type' predicate can ever map to
+      from this source. Disabled by construction, see disabled_reason above.
     log_source: zeek_dns
     mitre:
       tactics:

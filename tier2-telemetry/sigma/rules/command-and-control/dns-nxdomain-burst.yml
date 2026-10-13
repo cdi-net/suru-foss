@@ -14,6 +14,43 @@
 # rule catches the opposite DGA failure mode: a host rapidly querying MANY
 # distinct algorithmically-generated names, most of which do NOT resolve
 # (NXDOMAIN), as malware hunts for its live C2 rendezvous domain.
+#
+# Population filters (2026-10-10):
+# (a) PTR excluded (filter_ptr) — a DGA rendezvous domain is always resolved
+#     forward (A/AAAA), never reverse-looked-up, so a reverse (PTR) NXDOMAIN
+#     can never be DGA-cycling evidence. PTR also covers DNS-SD browse
+#     probes (`b._dns-sd._udp.<domain>`, `db._dns-sd._udp.<domain>`,
+#     `lb._dns-sd._udp.<reverse-subnet>.in-addr.arpa`) that NXDOMAIN against
+#     an unpopulated reverse zone.
+# (b) The suffix class (filter_special_use) is IANA special-use /
+#     infrastructure names that cannot be registered through a registrar:
+#     the reverse-mapping zones (`.in-addr.arpa`, `.ip6.arpa`), Discovery of
+#     Designated Resolvers (DDR) names under `.resolver.arpa`
+#     (`_dns.resolver.arpa` SVCB queries), `.home.arpa`, reserved
+#     test/example/invalid/localhost names, the mDNS `.local` namespace, Tor
+#     `.onion`, and the `.alt` namespace. The `.arpa` zones are listed
+#     individually, never as a bare `.arpa`, matching suru-dns-entropy.zeek
+#     local_suffixes; all 3,576 upstream `.arpa` NXDOMAIN documents in a
+#     7-day read fall in these four zones. ACCEPTED BLIND SPOT: a reverse
+#     zone is delegated to whoever holds the address block, so an attacker
+#     could cycle names under their OWN reverse zone; that is a
+#     single-delegation scheme (one zone, blockable as a unit), not the
+#     registrar-cycling DGA this rule targets.
+# (c) These are false-positive population filters on ECS fields
+#     (dns.question.name, dns.question.type) in this canonical rule: they
+#     scope which NXDOMAIN events are even DGA-candidate evidence.
+# (d) A negated filter requires the field to exist, so an NXDOMAIN document
+#     carrying no question name or type (~16/week observed) is dropped along
+#     with every other document that fails a filter clause's existence test —
+#     intended: a nameless NXDOMAIN document cannot be distinct-name DGA
+#     evidence either way.
+#
+# Population read (2026-10-10, 38.6h sample): 1,476 upstream NXDOMAIN
+# documents; 863 under .arpa (713 SVCB, all _dns.resolver.arpa; 150 PTR
+# reverse lookups incl. DNS-SD browse probes); 84 under .invalid over 42
+# distinct random labels (this-url-does-not-exist-<uuid>.invalid). Filtering
+# PTR + special-use suffixes cuts the per-event match rate by 64%.
+#
 # Validation: sigma check dns-nxdomain-burst.yml
 references:
   - https://attack.mitre.org/techniques/T1568/002/
@@ -24,13 +61,15 @@ description: |
   Detects a burst of failed DNS resolutions (NXDOMAIN) from a single internal
   host — the signature of Domain Generation Algorithm (DGA) malware cycling
   through many algorithmically-generated candidate C2 domains until one
-  resolves. The Sigma selection scopes to the NXDOMAIN event population; the
-  binding OpenSearch detector (Layer 2) applies the per-source
-  distinct-domain cardinality threshold over a time window that actually
-  distinguishes DGA cycling from a single mistyped or dead domain retried.
+  resolves. The Sigma selection scopes to the NXDOMAIN event population,
+  excluding reverse (PTR) lookups and IANA special-use/infrastructure name
+  suffixes that can never be a DGA rendezvous domain; the binding OpenSearch
+  detector (Layer 2) applies the per-source distinct-domain cardinality
+  threshold over a time window that actually distinguishes DGA cycling from
+  a single mistyped or dead domain retried.
 author: SURU Detection Engineering / SURU Platform
 date: 2026/07/05
-modified: 2026/07/05
+modified: 2026/10/10
 tags:
   - attack.ta0011
   - attack.t1568.002
@@ -42,7 +81,22 @@ detection:
   selection:
     event.dataset: dns
     dns.response_code: NXDOMAIN
-  condition: selection
+  filter_special_use:
+    dns.question.name|endswith:
+      - '.in-addr.arpa'
+      - '.ip6.arpa'
+      - '.resolver.arpa'
+      - '.home.arpa'
+      - '.invalid'
+      - '.test'
+      - '.example'
+      - '.localhost'
+      - '.local'
+      - '.onion'
+      - '.alt'
+  filter_ptr:
+    dns.question.type: PTR
+  condition: selection and not 1 of filter_*
 falsepositives:
   - Chrome/Chromium random-hostname DNS probes at startup (3 x 7-15 char random
     labels) — a small fixed burst, well under the distinct-domain threshold
@@ -50,4 +104,9 @@ falsepositives:
     NXDOMAIN for a SMALL set of names (low distinct-name cardinality)
   - Antivirus / telemetry clients probing many subdomains of ONE parent domain
     (dedupe by registered domain if this proves noisy)
+  - DNS Discovery of Designated Resolvers (DDR) `_dns.resolver.arpa` SVCB
+    probes, DNS-SD PTR browse probes, and random-label `.invalid` reachability
+    probes — filtered by filter_special_use/filter_ptr since 2026/10/10
+  - Off-VPN corporate split-horizon names (e.g. corp.example) that only resolve
+    on a remote network — low distinct-name cardinality
 level: high
