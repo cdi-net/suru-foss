@@ -104,11 +104,12 @@ Routed by the syslog `program` field (set by `program-override("zeek-<type>")` i
 Tier 1 syslog-ng template) → `event.dataset` is the **bare** Zeek log name. A common
 stage maps the connection 5-tuple on every type: `id.orig_h`/`id.orig_p` →
 `source.ip`/`source.port`, `id.resp_h`/`id.resp_p` → `destination.ip`/`destination.port`,
-`proto` → `network.transport`, `uid` → `zeek.uid`.
+`proto` → `network.transport`, `uid` → `zeek.uid`, and the payload byte counts
+`orig_bytes` → `source.bytes`, `resp_bytes` → `destination.bytes`.
 
 | `program` | `event.dataset` | Type-specific ECS mapping |
 |-----------|-----------------|---------------------------|
-| `zeek-conn` | `conn` | (common 5-tuple only) |
+| `zeek-conn` | `conn` | common 5-tuple + `source.bytes`/`destination.bytes` — the fields the exfiltration (`source.bytes >= 100000000`) and port-scan (`source.bytes:0`/`destination.bytes:0`) rules select on; other conn fields (`duration`, `conn_state`, `history`, `*_pkts`) stay raw |
 | `zeek-dns` | `dns` | `query`→`dns.question.name`, `qtype_name`→`dns.question.type`, `qclass_name`→`dns.question.class`, `rcode_name`→`dns.response_code`, `answers`→`dns.resolved` |
 | `zeek-dhcp` | `dhcp` | `client_addr`→`source.ip`, `server_addr`→`destination.ip`, `mac`→`source.mac`, `host_name`/`assigned_addr`/`requested_addr`/`lease_time`/`msg_types`/`domain`→`dhcp.*` |
 | `zeek-http` | `http` | (common 5-tuple; raw Zeek http fields retained) |

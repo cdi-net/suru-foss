@@ -84,6 +84,11 @@ falsepositives:
   - Chrome/Chromium startup random-hostname probes (a small fixed burst)
   - Security/telemetry clients probing many subdomains of ONE parent domain —
     allowlist the source.ip or dedupe by registered domain if noisy
+  - DDR `_dns.resolver.arpa` SVCB, DNS-SD PTR browse probes and random-label
+    `.invalid` reachability probes — filtered in the bound Sigma rule since
+    2026/10/10
+  - Off-VPN corporate split-horizon names (`corp.example`) — low
+    distinct-name cardinality
 
 verification:
   static: passed

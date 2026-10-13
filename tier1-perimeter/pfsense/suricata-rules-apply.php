@@ -108,6 +108,19 @@ if (count($desired_physical) > 0) {
 }
 
 /**
+ * EVE http logging on SURU-managed carriers: extended (method, status,
+ * protocol, length — the fields the initial-access HTTP leg selects on;
+ * MITRE TA0001 / T1190), with NO custom header list. The package's
+ * suricata_generate_yaml.php writes `extended: yes` only when
+ * eve_log_http_extended == 'on', and emits `custom: [<headers>]` whenever
+ * eve_log_http_extended_headers is non-empty; the package migration seeds
+ * that list with authorization / cookie / set-cookie, which would ship
+ * credentials and session tokens to the SIEM. Pinned empty on purpose.
+ */
+const SURU_EVE_HTTP_EXTENDED         = 'on';
+const SURU_EVE_HTTP_EXTENDED_HEADERS = '';
+
+/**
  * Compute netmap threads for a physical NIC: explicit override wins; else
  * min(NIC netmap queues, max(1, ncpu/2)). Never 'auto' — the FreeBSD
  * threading quirk means you must size explicitly to the NIC's rings.
@@ -236,6 +249,8 @@ function suru_make_default_iface(string $iface_name, string $uuid, string $ips_m
     'eve_log_alerts_http'     => 'on',
     'eve_log_drops'           => 'on',
     'eve_log_http'            => 'on',
+    'eve_log_http_extended'   => SURU_EVE_HTTP_EXTENDED,
+    'eve_log_http_extended_headers' => SURU_EVE_HTTP_EXTENDED_HEADERS,
     'eve_log_dns'             => 'on',
     'eve_log_tls'             => 'on',
     'rulesets'                => '',  // populated by rule-selection step below
@@ -333,6 +348,19 @@ if (count($desired_ifaces) > 0) {
       $interfaces[$idx]['ips_netmap_threads'] = '';
       $reg_dirty = true;
       echo "[suricata-rules-apply] carrier={$name}: ips_netmap_threads cleared (legacy mode)\n";
+    }
+    // EVE http: extended on, custom header list empty (see SURU_EVE_HTTP_*).
+    $eve_http_want = [
+      'eve_log_http_extended'         => SURU_EVE_HTTP_EXTENDED,
+      'eve_log_http_extended_headers' => SURU_EVE_HTTP_EXTENDED_HEADERS,
+    ];
+    foreach ($eve_http_want as $key => $want) {
+      if (!array_key_exists($key, $entry) || (string)$entry[$key] !== $want) {
+        $interfaces[$idx][$key] = $want;
+        $reg_dirty = true;
+        $shown = ($want === '') ? '(empty)' : $want;
+        echo "[suricata-rules-apply] carrier={$name}: {$key} -> {$shown}\n";
+      }
     }
   }
 

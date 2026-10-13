@@ -29,24 +29,56 @@ export {
     ## Minimum query label length to evaluate
     const min_label_len: count = 20 &redef;
 
-    ## Shannon entropy threshold (bits per character) above which alert fires
-    const entropy_threshold: double = 3.8 &redef;
+    ## Shannon entropy threshold (bits per character) above which alert
+    ## fires. Raised 3.8 -> 4.0 together with the unicast/local/DNS-SD
+    ## scoping of the entropy leg below. Evidence (7-day sample, 400 of 3710
+    ## notices): of the 104 unicast names left after the mDNS/.invalid
+    ## exclusions, 21 scored >=4.0 and 7 scored >=4.1, mostly large
+    ## cloud/CDN vendor names.
+    ##
+    ## Known, accepted blind spot: a hex-encoded alphabet (0-9a-f, 16
+    ## symbols) has a maximum possible Shannon entropy of exactly
+    ## log2(16) == 4.0 bits/char, so a hex-encoded tunnel label reaches the
+    ## `>=` comparison below only when its digit distribution is exactly
+    ## uniform, which random tunnel data almost never is: this leg is
+    ## effectively blind to hex tunnels. base32 (log2(32)==5.0) and base64
+    ## (log2(64)==6.0) encoded tunnel labels remain well above 4.0 and are
+    ## still caught. The length leg is the backstop for a hex-encoded tunnel.
+    const entropy_threshold: double = 4.0 &redef;
 
     ## Unicast (port 53) full-query-name length at/above which the length-leg
-    ## notice fires. Evidence for the default (30d live baseline): only
+    ## notice fires. Original evidence for 100 (30d live baseline): only
     ## 170,638 of 2.15M names were >=40 chars and 40.3% of those were
     ## local/service-discovery — at >=100 with local excluded, expected
     ## benign volume is near zero.
-    const max_name_len: count = 100 &redef;
+    ##
+    ## Raised 100 -> 130. Evidence (7-day sample): all 244
+    ## DNS_Excessive_Name_Length notices in the window were 118-126 chars,
+    ## from 2 source hosts, every one a single SaaS/collaboration vendor's
+    ## partition-style subdomain name under one cloud vendor's domain
+    ## (neutral form: long-cdn-label-abc123.vendor.example) — none reached
+    ## 130. iodine/dns2tcp-class tunnels pack labels toward the 253-byte
+    ## protocol ceiling, so 130 keeps them well in scope while clearing this
+    ## benign class.
+    const max_name_len: count = 130 &redef;
 
     ## Name suffixes treated as local namespaces — never evaluated by the
-    ## length leg (RFC 6762 .local, RFC 8375 home/.home, private-use
-    ## internal/lan/localdomain, and ONLY the two real reverse zones under
-    ## .arpa). Suffix-matched (not last-label) so a bare `.arpa` no longer
-    ## excludes an attacker-delegated `*.evil.arpa` (review finding).
+    ## length leg OR the entropy leg below (both call this same helper).
+    ## RFC 6762 .local, RFC 8375 home/.home, private-use
+    ## internal/lan/localdomain, ONLY the two real reverse zones under
+    ## .arpa, and RFC 6761 .invalid (reserved, never resolvable: 15 of 400
+    ## sampled notices were "this-url-does-not-exist-<uuid>.invalid" probes
+    ## on port 53; a name a compliant resolver never resolves cannot carry a
+    ## bidirectional tunnel). ACCEPTED BLIND SPOT: one-way, query-only
+    ## exfiltration that a LAN host sends straight to an attacker-run server
+    ## on port 53 (bypassing the router's resolver) can use `.invalid` names
+    ## and is not scored by either leg; removing ".invalid" from this set
+    ## via &redef restores both legs for it. Suffix-matched (not last-label)
+    ## so a bare `.arpa` does not exclude an attacker-delegated
+    ## `*.evil.arpa`.
     const local_suffixes: set[string] = {
         ".local", ".internal", ".lan", ".home", ".localdomain",
-        ".in-addr.arpa", ".ip6.arpa"
+        ".in-addr.arpa", ".ip6.arpa", ".invalid"
     } &redef;
 
     ## DNS record types DNS-SD (RFC 6763) actually uses (PTR=12, TXT=16,
@@ -106,6 +138,11 @@ function shannon_entropy(s: string): double
 
 event dns_request(c: connection, msg: dns_msg, query: string, qtype: count, qclass: count)
     {
+    # Lowercased name and its labels, computed once and shared by both legs
+    # (Zeek rejects a second `local` of the same name in this handler).
+    local qlower = to_lower(query);
+    local llparts = split_string(qlower, /\./);
+
     # ── Length leg ─────────────────────────────────────────────────────────
     # Unicast resolver traffic only: mDNS (5353), LLMNR (5355), NBNS (137)
     # carry long service-discovery names by design and are not tunneling
@@ -120,10 +157,8 @@ event dns_request(c: connection, msg: dns_msg, query: string, qtype: count, qcla
         # anchored (suffix / label-position + qtype) so neither can be
         # forged by attacker-controlled substring content. Residual risk:
         # an attacker willing to use a PTR/SRV/TXT qtype AND real
-        # `_svc._tcp.` structure can still evade the length leg; the
-        # entropy leg is the backstop.
-        local qlower = to_lower(query);
-        local llparts = split_string(qlower, /\./);
+        # `_svc._tcp.` structure can still evade the length leg and, since
+        # it shares both guards, the entropy leg too.
         if ( ! suru_is_local_name(qlower) && ! suru_is_dnssd(llparts, qtype) )
             NOTICE([
                 $note        = DNS_Excessive_Name_Length,
@@ -136,7 +171,24 @@ event dns_request(c: connection, msg: dns_msg, query: string, qtype: count, qcla
             ]);
         }
 
-    # Only evaluate the leftmost label (subdomain portion)
+    # ── Entropy leg ─────────────────────────────────────────────────────
+    # Unicast resolver traffic only — the same scoping and anchored helpers
+    # the length leg above already has: mDNS (5353)/LLMNR (5355)/NBNS (137)
+    # names are not tunneling candidates. Evidence (7-day sample, 400 of
+    # 3710 notices): 281 were mDNS/5353 DNS-SD service-instance names
+    # (`_tcp.local`/`_udp.local`, e.g. `device._service._tcp.local`, scoring
+    # well above the old 3.8 threshold) and 15 were
+    # `this-url-does-not-exist-<uuid>.invalid` probes on port 53 (excluded
+    # via local_suffixes above).
+    if ( ! ( c$id$resp_p == 53/udp || c$id$resp_p == 53/tcp ) )
+        return;
+
+    if ( suru_is_local_name(qlower) || suru_is_dnssd(llparts, qtype) )
+        return;
+
+    # Only evaluate the leftmost label (subdomain portion) of the ORIGINAL
+    # (not lowercased) query — scoring itself is unchanged by the scoping
+    # guards above.
     local parts = split_string(query, /\./);
     if ( |parts| < 2 ) return;
     local label = parts[0];

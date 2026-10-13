@@ -76,6 +76,22 @@ falsepositives:
   - Suppression in the underlying Zeek script (10 min per host+query,
     suru-dns-entropy.zeek) reduces but does not eliminate repeat noise from a
     single legitimate high-entropy domain
+  - "RESOLVED 2026-10-08: mDNS/5353 DNS-SD service-instance names (e.g. a
+    neutral device._service._tcp.local) and .invalid probe names were the
+    two largest false-positive classes (281/400 and 15/400 respectively, in
+    a 7-day sampled population of 3710 notices) — the entropy leg now
+    applies the same unicast-port-53 + local_suffixes + DNS-SD scoping the
+    length leg (dns-excessive-name-length.yml) already had, so neither
+    class reaches this detector any more"
+  - "ACCEPTED BLIND SPOT 2026-10-08: entropy_threshold raised 3.8 -> 4.0 to
+    cut remaining FPs among large cloud/CDN vendor names (21/104 of the
+    remaining unicast sample scored >=4.0) means a hex-encoded tunnel label
+    (16-symbol alphabet, max possible entropy exactly 4.0 bits/char) now
+    fires only when its digit distribution is exactly uniform (the Zeek
+    comparison is >=), so this leg is effectively blind to it —
+    base32/base64-encoded tunnels stay above 4.0 and are still caught; the
+    length leg (dns-excessive-name-length.yml, now >=130 chars) remains the
+    backstop for a hex-encoded tunnel"
 
 verification:
   static: passed   # YAML schema + ECS field-existence checks, this session
