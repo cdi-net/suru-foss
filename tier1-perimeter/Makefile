@@ -111,6 +111,8 @@ test:
 	@bash $(REPO_ROOT)/tier1-perimeter/scripts/lib/tests/test-certs-preissued.sh
 	@bash $(REPO_ROOT)/tier1-perimeter/scripts/lib/tests/test-pki-dir-norepo.sh
 	@bash $(REPO_ROOT)/tier1-perimeter/scripts/tests/test-deploy-rendered-dir.sh
+	@bash $(REPO_ROOT)/tier1-perimeter/scripts/lib/tests/test-opnsense-localzones-stage.sh
+	@bash $(REPO_ROOT)/tier1-perimeter/opnsense/tests/test-unbound-localzones.sh
 
 # ---------------------------------------------------------------------------
 # REST API targets — source lib/api.sh and dispatch on ROUTER_PLATFORM
