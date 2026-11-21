@@ -1,0 +1,19 @@
+===STATS===
+SourceName;SourceId;SourceInstance;State;Type;Number
+dst.network;d_siem_tls#0;tls,syslog.suru.local:443;a;queued;0
+dst.network;d_siem_tls#0;tls,syslog.suru.local:443;a;written;436220
+dst.network;d_siem_tls#0;tls,syslog.suru.local:443;a;dropped;0
+dst.network;d_siem_tls#0;tls,syslog.suru.local:443;a;eps_last_1h;12.3
+dst.network;d_siem_tls#0;tls,syslog.suru.local:443;a;eps_last_24h;10.1
+src.file;s_filterlog#0;/var/log/filter.log;a;stamp;1760499990
+===DQFILES===
+===OPENFILES===
+RC|0|89101
+===CAPACITY===
+CONF|0|capacity-bytes(4294967296)
+HWPROFILE|0|SURU_HW_SYSLOGNG_DISK_BUFFER_BYTES=4294967296
+===TIME===
+1760500000
+===SVCSTATUS===
+syslog-ng is running
+===END===

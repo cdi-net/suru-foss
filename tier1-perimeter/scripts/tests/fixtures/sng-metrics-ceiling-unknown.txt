@@ -1,0 +1,22 @@
+===STATS===
+SourceName;SourceId;SourceInstance;State;Type;Number
+dst.network;d_siem_tls#0;tls,syslog.suru.local:443;a;queued;0
+dst.network;d_siem_tls#0;tls,syslog.suru.local:443;a;written;436220
+dst.network;d_siem_tls#0;tls,syslog.suru.local:443;a;dropped;0
+dst.network;d_siem_tls#0;tls,syslog.suru.local:443;a;eps_last_1h;12.3
+dst.network;d_siem_tls#0;tls,syslog.suru.local:443;a;eps_last_24h;10.1
+src.file;s_filterlog#0;/var/log/filter.log;a;stamp;1760499990
+===DQFILES===
+FILE|/var/db/syslog-ng-00003.rqf|1760499997|2403294787|0|0|0|-
+FILE|/var/db/syslog-ng-00002.rqf|1757200000|5368710605|0|0|325239|-
+===OPENFILES===
+RC|0|89101
+OPEN|/var/db/syslog-ng-00003.rqf
+===CAPACITY===
+CONF|2|grep: /usr/local/etc/syslog-ng.conf: Permission denied
+HWPROFILE|2|grep: /usr/local/etc/suru/hw-profile.conf: No such file or directory
+===TIME===
+1760500000
+===SVCSTATUS===
+syslog-ng is running
+===END===
