@@ -61,6 +61,10 @@ _platform_deploy() {
 
   # SEC-020/SEC-021: use array to avoid word-splitting on key paths; add ConnectTimeout.
   local -a ssh_opts=(-i "${ssh_key}" -o "StrictHostKeyChecking=${_strict}" -o "BatchMode=yes" -o "ConnectTimeout=15")
+  # Connection reuse when deploy.sh enabled it (lib/ssh.sh ssh_mux_enable).
+  if [[ -n "${SSH_MUX_OPTS+set}" && ${#SSH_MUX_OPTS[@]} -gt 0 ]]; then
+    ssh_opts+=("${SSH_MUX_OPTS[@]}")
+  fi
 
   # --- Pre-deploy API auth probe ----------------------------------------------
   # OPNsense API is built-in. We verify credentials before SSH-deploying so
@@ -133,7 +137,7 @@ _platform_deploy() {
       return 0
     fi
 
-    _opn_remote_exec "mkdir -p ${_OPN_REMOTE_STAGING}"
+    _opn_remote_exec "mkdir -p '${_OPN_REMOTE_STAGING}'"
     scp "${ssh_opts[@]}" "${_OPN_APPLIER_BACKUP}" "${ssh_user}@${target}:${stage_applier}" \
       || { rm -f -- "${pass_local}"; return 1; }
     scp "${ssh_opts[@]}" "${pass_local}" "${ssh_user}@${target}:${pass_stage}" \
@@ -242,6 +246,120 @@ _platform_deploy() {
       return 1
     fi
     trap '_opn_revert' ERR
+  fi
+
+  # --- Local-DNS hygiene: unbound special-use zones + system-domain audit ------
+  # OPNsense counterpart of the pfSense unbound-localzones stage. Leg A (special-use always_nxdomain zones) is automated via the
+  # unbound.opnsense.d drop-in dir; leg B (system-domain static) is
+  # evidence-driven — the applier reads the LIVE zone list and exits 6 with
+  # the exact GUI step when static is desired, safe, and absent (the OPNsense
+  # Unbound model path is unverified on a live box; no blind config write).
+  # Limitation: leg B reports instead of converging system_domain_local_zone_type;
+  # a converging write needs the model path captured from a live OPNsense box.
+  # rc 6/7 are ADVISORY (GUI action pending / read-back unavailable): warn and
+  # continue. rc 4 vs 5 distinguishes a completed rollback from a failed one, so
+  # the recovery guidance does not depend on parsing the applier's log text. rc 3
+  # is the one hard failure that deliberately does NOT revert: the run wrote
+  # nothing, so a config.xml revert would undo other stages over drift this
+  # deploy did not cause. A hard failure reverts EXPLICITLY: bash does not fire an ERR trap
+  # for the `return` builtin (verified — a bare failing command does, `return 1`
+  # does not), so relying on the trap here would silently skip the revert every
+  # other failure point in this window gets. Gates:
+  # SURU_UNBOUND_LOCALZONES / SURU_UNBOUND_SYSTEM_DOMAIN_STATIC (same as pfSense).
+  # The drop-in is outside config.xml, so _opn_revert() cannot restore it: the
+  # applier rolls its own write back (pre-run content, or removal) and restarts
+  # unbound on every post-write failure before returning non-zero. A drop-in
+  # that survives to a later stage's revert is one unbound already accepted and
+  # the zone read-back verified — benign, and re-converged by the next deploy —
+  # so revert deliberately leaves it alone rather than restarting the resolver
+  # a second time.
+  # Explicit revert for this stage's hard failures (see the note above on
+  # `return` and the ERR trap). Disarms the trap first so a failing command
+  # inside the revert cannot re-enter it, and skips entirely when no backup is
+  # tracked (SURU_SKIP_BACKUP) rather than emitting a confusing revert warning.
+  _opn_ulz_revert_and_fail() {
+    [[ -n "${_opn_backup_remote}" ]] || return 0
+    trap - ERR
+    if ! _opn_revert; then
+      echo "[opnsense] CRITICAL: revert after the unbound-localzones failure did not complete — see above." >&2
+    fi
+  }
+
+  if [[ "${SURU_UNBOUND_LOCALZONES:-true}" == "true" ]]; then
+    local _opn_ulz_local
+    _opn_ulz_local="$(cd "${SCRIPT_DIR}/../../opnsense" && pwd)/unbound-localzones-apply.php"
+    local _opn_ulz_remote="${_OPN_REMOTE_STAGING}/unbound-localzones-apply.php"
+    local _ULZSUDO=""
+    [[ "${ssh_user}" != "root" ]] && _ULZSUDO="sudo "
+    local _ulz_args=""
+    [[ "${SURU_UNBOUND_SYSTEM_DOMAIN_STATIC:-true}" != "true" ]] && _ulz_args=" --no-system-domain-static"
+    echo "[opnsense] === Local-DNS hygiene: unbound local-zones ==="
+    if [[ "${dry_run}" == "true" ]]; then
+      echo "[opnsense] (dry-run) Would stage + run unbound-localzones-apply.php${_ulz_args}"
+    else
+      _opn_remote_exec "mkdir -p '${_OPN_REMOTE_STAGING}'"
+      # Named cause: an unchecked scp failure would surface later as the applier
+      # "failing" with rc 127, pointing at the wrong thing entirely.
+      if ! scp "${ssh_opts[@]}" "${_opn_ulz_local}" "${ssh_user}@${target}:${_opn_ulz_remote}"; then
+        echo "[opnsense] ERROR: could not stage unbound-localzones-apply.php to ${_opn_ulz_remote}." >&2
+        _opn_ulz_revert_and_fail; return 1
+      fi
+      local _ulz_rc=0
+      # The exit code IS the contract here, so it must not depend on the remote
+      # login shell: SSH accounts on these platforms get a csh-family shell,
+      # which has no `var=value` assignment at all (lib/ssh.sh header). A
+      # `rc=$?; ...; exit $rc` relay would run the applier and then lose its
+      # status. Run the applier as the only remote command so ssh returns its
+      # status directly, wrapped `sh -c "…"` as a single argument per that same
+      # rule, and clean the staged file up separately.
+      # shellcheck disable=SC2029
+      ssh "${ssh_opts[@]}" "${ssh_user}@${target}" \
+        "sh -c \"${_ULZSUDO}php '${_opn_ulz_remote}'${_ulz_args}\"" \
+        || _ulz_rc=$?
+      # Best-effort: a drop between the two calls is the cost of not relaying the
+      # rc through the remote shell. Say when it happens — silence would leave the
+      # operator with an unexplained file on the router.
+      # shellcheck disable=SC2029
+      if ! ssh "${ssh_opts[@]}" "${ssh_user}@${target}" \
+        "sh -c \"${_ULZSUDO}rm -f '${_opn_ulz_remote}'\"" >/dev/null 2>&1; then
+        echo "[opnsense] WARN: could not remove the staged applier at ${_opn_ulz_remote} — harmless, and the next deploy overwrites it."
+      fi
+      case "${_ulz_rc}" in
+        0) ;;
+        6) echo "[opnsense] WARN: system-domain static needs the GUI step reported above — deploy continues." ;;
+        7) echo "[opnsense] WARN: local-zones applied but UNVERIFIED (unbound-control unreachable) — verify manually." ;;
+        2) echo "[opnsense] ERROR: unbound-localzones applier refused before writing (rc=2) — see the named reason above." >&2
+           echo "[opnsense]        Nothing was written; any existing drop-in is intact — no cleanup here." >&2
+           _opn_ulz_revert_and_fail; return 1 ;;
+        3) echo "[opnsense] ERROR: unbound-localzones zones are not being served (rc=3), and this run wrote nothing." >&2
+           echo "[opnsense]        Pre-existing drift: the drop-in is present but unbound is not serving it." >&2
+           echo "[opnsense]        Check that /usr/local/etc/unbound.opnsense.d is included by the" >&2
+           echo "[opnsense]        generated config, and that unbound restarted." >&2
+           echo "[opnsense]        NOT reverting: nothing this deploy did caused it, and a config.xml revert" >&2
+           echo "[opnsense]        would undo the other stages' work without fixing the resolver." >&2
+           return 1 ;;
+        4) echo "[opnsense] ERROR: unbound-localzones applier failed after writing (rc=4) — its write was" >&2
+           echo "[opnsense]        rolled back and unbound restarted on the pre-run configuration. The" >&2
+           echo "[opnsense]        rollback did not fail (that is rc 5); investigate why the apply did not take." >&2
+           _opn_ulz_revert_and_fail; return 1 ;;
+        5) echo "[opnsense] CRITICAL: unbound-localzones rollback FAILED (rc=5) — the resolver may be down." >&2
+           echo "[opnsense]        Do NOT delete /usr/local/etc/unbound.opnsense.d/suru-localzones.conf;" >&2
+           echo "[opnsense]        it may hold the restored content. Investigate unbound directly:" >&2
+           echo "[opnsense]          configctl unbound restart" >&2
+           _opn_ulz_revert_and_fail; return 1 ;;
+        *) echo "[opnsense] ERROR: unbound-localzones applier failed (rc=${_ulz_rc})." >&2
+           # rc 4 and 5 above carry the rollback outcome in the exit status.
+           # Anything else here means the applier never reported one — it died
+           # before it could act (SSH drop, PHP fatal, an rc it does not define).
+           echo "[opnsense]        The applier reported no rollback outcome — it likely died before acting." >&2
+           echo "[opnsense]        If its output shows neither 'Rollback complete' nor 'CRITICAL', recover with:" >&2
+           echo "[opnsense]          rm -f /usr/local/etc/unbound.opnsense.d/suru-localzones.conf" >&2
+           echo "[opnsense]          configctl unbound restart" >&2
+           _opn_ulz_revert_and_fail; return 1 ;;
+      esac
+    fi
+  else
+    echo "[opnsense] Skipping unbound local-zones (SURU_UNBOUND_LOCALZONES=false)."
   fi
 
   # --- Dead-man's-switch for the (future) OPNsense inline flip -----------------
