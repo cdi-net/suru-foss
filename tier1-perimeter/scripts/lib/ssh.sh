@@ -38,6 +38,88 @@ _ssh_opts_array() {
     -o "ConnectTimeout=15"
     -o "StrictHostKeyChecking=${SSH_STRICT_HOST_KEY_CHECKING:-yes}"
   )
+  if [[ ${#SSH_MUX_OPTS[@]} -gt 0 ]]; then
+    SSH_OPTS+=("${SSH_MUX_OPTS[@]}")
+  fi
+}
+
+# =============================================================================
+# Connection reuse
+# =============================================================================
+# A deploy runs every remote step as its own ssh/scp process. Without reuse each
+# one is a new TCP connection and a new key login, and a single deploy crosses
+# the perimeter's own SSH brute-force threshold (suru-ssh-bruteforce.zeek counts
+# completed connections per source/target pair). ssh_mux_enable turns on OpenSSH
+# connection multiplexing for the calling process: the first ssh becomes the
+# master, every later ssh/scp carrying SSH_MUX_OPTS runs as a channel inside it.
+#
+#   ControlMaster=auto    attach to a live master, else become one; a stale or
+#                         dead socket falls back to a plain connection
+#   ControlPath=<dir>/%C  per-run 0700 directory under /tmp (a Unix socket path
+#                         is capped near 104 bytes; %C is 40 hex characters)
+#   ControlPersist        the master outlives the step that started it; it is
+#                         closed by ssh_mux_close, the timeout is the backstop
+#                         (default 120 s: it also bounds how long a master
+#                         left by a killed deploy stays usable by the same
+#                         user; a step starting later than that reconnects)
+#   ServerAlive*          a master whose link died must exit, or every channel
+#                         attached to it hangs. The probes go through the
+#                         encrypted channel and ask sshd itself for a reply
+#                         (ssh_config(5)), so a remote command that prints
+#                         nothing does not spend the budget; the probes
+#                         keep an idle-timeout middlebox from dropping the
+#                         shared connection, and 10 unanswered probes 30 s
+#                         apart (about 5 minutes) end it. Same budget as
+#                         pfsense.sh _pf_remote_exec_long, inside the safety
+#                         timer's default revert window
+#                         (SURU_SAFETY_REVERT_SECONDS, 600 s)
+#
+# ssh keeps the FIRST value it sees for an option, so a caller that needs a
+# fresh connection (proving a new login still works, as the safety timer's
+# disarm does) prepends `-o ControlMaster=no -o ControlPath=none`.
+#
+# SURU_SSH_MUX=false disables reuse (one connection per step, as before).
+
+# Initialised once: a second source of this file must not drop a live master.
+if [[ -z "${_SSH_MUX_DIR+set}" ]]; then
+  SSH_MUX_OPTS=()
+  _SSH_MUX_DIR=""
+fi
+
+# ssh_mux_enable — idempotent. Never fails the caller: without a socket
+# directory the deploy runs one connection per step.
+ssh_mux_enable() {
+  [[ "${SURU_SSH_MUX:-true}" == "false" ]] && return 0
+  [[ -n "${_SSH_MUX_DIR}" && -d "${_SSH_MUX_DIR}" ]] && return 0
+  local dir
+  if ! dir="$(mktemp -d /tmp/suru-ssh.XXXXXX)"; then
+    echo "[ssh] WARN: could not create an SSH control directory; one connection per step." >&2
+    return 0
+  fi
+  chmod 700 "${dir}"
+  _SSH_MUX_DIR="${dir}"
+  SSH_MUX_OPTS=(
+    -o "ControlMaster=auto"
+    -o "ControlPath=${dir}/%C"
+    -o "ControlPersist=${SURU_SSH_CONTROL_PERSIST:-120}"
+    -o "ServerAliveInterval=30"
+    -o "ServerAliveCountMax=10"
+  )
+}
+
+# ssh_mux_close — stop every master in the directory and remove it. Safe when
+# reuse is off or nothing connected. The state is not exported: a child script
+# that sources this library starts with reuse off and never closes the parent's.
+ssh_mux_close() {
+  [[ -n "${_SSH_MUX_DIR}" ]] || return 0
+  local sock
+  for sock in "${_SSH_MUX_DIR}"/*; do
+    [[ -S "${sock}" ]] || continue
+    ssh -o "ControlPath=${sock}" -O exit suru-mux > /dev/null 2>&1 || true
+  done
+  rm -rf "${_SSH_MUX_DIR}"
+  _SSH_MUX_DIR=""
+  SSH_MUX_OPTS=()
 }
 
 # ssh_exec COMMAND
@@ -80,21 +162,25 @@ ssh_exec_raw() {
     "$@"
 }
 
-# ssh_exec_heredoc SCRIPT
-# Sends a multi-line script to the router via stdin over SSH (bash -s).
-# Used to drive pfSsh.php interactive stdin commands.
+# ssh_exec_heredoc SCRIPT [INTERPRETER]
+# Sends a multi-line script to the router via stdin over SSH. INTERPRETER is
+# the remote command that reads the script, passed as ONE argv token (default
+# "bash -s"). Pass 'sudo sh' for a POSIX sh under sudo (root-only reads): the
+# string is what the tcsh login shell execs, the same rule as above.
+# Used to drive pfSsh.php interactive stdin commands and root-only collection.
 ssh_exec_heredoc() {
-  local script="$1"
-  log_debug "SSH heredoc [${ROUTER_SSH_USER}@${ROUTER_HOST}] ($(printf '%s' "$script" | wc -l) lines)"
+  local script="$1" interp="${2:-bash -s}"
+  log_debug "SSH heredoc [${ROUTER_SSH_USER}@${ROUTER_HOST}] via '${interp}' ($(printf '%s' "$script" | wc -l) lines)"
   if ${DRY_RUN:-false}; then
-    _log DRY-RUN "ssh heredoc to ${ROUTER_SSH_USER}@${ROUTER_HOST}:"
+    _log DRY-RUN "ssh heredoc (${interp}) to ${ROUTER_SSH_USER}@${ROUTER_HOST}:"
     printf '%s\n' "$script" | sed 's/^/    /'
     return 0
   fi
   _ssh_opts_array
+  # shellcheck disable=SC2029
   printf '%s\n' "$script" | ssh "${SSH_OPTS[@]}" \
     "${ROUTER_SSH_USER}@${ROUTER_HOST}" \
-    bash -s
+    "${interp}"
 }
 
 # scp_push LOCAL REMOTE

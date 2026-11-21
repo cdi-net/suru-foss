@@ -31,6 +31,10 @@ set -euo pipefail
 # Remote path for the profile on the router.
 HW_PROFILE_REMOTE="/usr/local/etc/suru/hw-profile.conf"
 
+: "${_HW_BIN_MKDIR:=/bin/mkdir}"
+: "${_HW_BIN_MV:=/bin/mv}"
+: "${_HW_BIN_CHMOD:=/bin/chmod}"
+
 # ---------------------------------------------------------------------------
 # hw_compute_physmem_gb <physmem_bytes>
 # Rounds physmem_bytes to nearest GiB (integer). Avoids firmware-reserved RAM
@@ -106,7 +110,7 @@ hw_compute_profile() {
 
   # syslog-ng reliable disk-buffer capacity (bytes)
   # Scales with available disk; capped to avoid over-committing storage.
-  # Formula: 10% of available disk, floored at 1 GB, capped at 8 GB.
+  # Stepped by free space on / (df -k avail): <10 GB → 1 GB, <20 GB → 2 GB, <50 GB → 4 GB, else 8 GB.
   # Stored as bytes (syslog-ng capacity-bytes expects integer bytes).
   local disk_gb; disk_gb=$(( disk_kb / 1048576 ))
   local syslogng_disk_buf_bytes
@@ -317,7 +321,7 @@ hw_detect_hardware() {
 # ---------------------------------------------------------------------------
 hw_preflight_run() {
   local target="$1" ssh_user="$2" ssh_key="$3" strict="$4" dry_run="$5" verbose="$6"
-  local local_profile_path="${HW_LOCAL_PROFILE_PATH:-${TIER1_DIR:-.}/.hw-profile}"
+  local local_profile_path="${HW_LOCAL_PROFILE_PATH:-${SURU_HW_PROFILE:-${TIER1_DIR:-.}/.hw-profile}}"
   local -a ssh_opts=(-i "${ssh_key}" -o "StrictHostKeyChecking=${strict}" -o "BatchMode=yes" -o "ConnectTimeout=15")
 
   local preflight_status="ok"
@@ -397,9 +401,9 @@ hw_preflight_run() {
     if scp -i "${ssh_key}" -o "StrictHostKeyChecking=${strict}" -o "BatchMode=yes" \
          "${profile_tmp}" "${ssh_user}@${target}:${stage_path}" 2>/dev/null; then
       ssh "${ssh_opts[@]}" "${ssh_user}@${target}" \
-        "${_SUDO}mkdir -p '$(dirname "${HW_PROFILE_REMOTE}")' && \
-         ${_SUDO}mv '${stage_path}' '${HW_PROFILE_REMOTE}' && \
-         ${_SUDO}chmod 644 '${HW_PROFILE_REMOTE}'" 2>/dev/null \
+        "${_SUDO}${_HW_BIN_MKDIR} -p '$(dirname "${HW_PROFILE_REMOTE}")' && \
+         ${_SUDO}${_HW_BIN_MV} '${stage_path}' '${HW_PROFILE_REMOTE}' && \
+         ${_SUDO}${_HW_BIN_CHMOD} 644 '${HW_PROFILE_REMOTE}'" 2>/dev/null \
         || echo "[hw-preflight] WARN: could not write ${HW_PROFILE_REMOTE} on router." >&2
     else
       echo "[hw-preflight] WARN: SCP to router staging failed — profile not written to router." >&2

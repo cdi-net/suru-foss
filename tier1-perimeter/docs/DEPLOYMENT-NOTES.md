@@ -149,10 +149,11 @@ Override per-invocation with `PLATFORM=opnsense make deploy`.
 | Target | Action |
 |---|---|
 | `make render` | Merge Tier 2 intelligence into Tier 1 templates → `rendered/<platform>/` |
-| `make deploy` | Render + push rendered artefacts to the router |
+| `make deploy` | Hardware preflight, render, then push rendered artefacts to the router |
 | `make deploy-full` | Explicit `render` + `deploy` in one step |
 | `make clean` | Remove `rendered/` artefacts (preserves `.gitkeep`) |
-| `make test` | Run render pipeline tests |
+| `make gen-certs` | Issue the Tier 1 syslog-ng mTLS client pair from the existing Root CA (idempotent; run on the PKI host, never creates a CA) |
+| `make test` | Run the render pipeline tests and the Tier 1 suites (PHP-backed suites skip when `php` is not installed) |
 | `make api-health` | Probe router REST API (pfRest or OPNsense native) |
 | `make api-validate` | Verify core services running via API |
 | `make api-install-pfrest` | One-shot: install pfRest on pfSense as first package |
@@ -170,10 +171,12 @@ Override per-invocation with `PLATFORM=opnsense make deploy`.
 For direct script use, bypassing the Makefile:
 
 ```bash
-./scripts/deploy.sh --platform pfsense [--target <host>] [--dry-run] [--verbose]
+./scripts/deploy.sh --platform pfsense [--target <host>] [--dry-run] [--verbose] [--rendered-dir <abs-dir>]
 ```
 
 `deploy.sh` auto-engages dry-run when `ROUTER_HOST` / `--target` is unset.
+`--rendered-dir` reads the rendered artefacts from an absolute directory that
+must exist, instead of `tier1-perimeter/rendered/<platform>`.
 
 ---
 
@@ -188,6 +191,50 @@ For direct script use, bypassing the Makefile:
 5. Dispatches to the platform driver for deploy and service reload.
 6. Verifies post-deploy state.
 7. **Automatically reverts** to the backup if any step fails.
+
+### pfSense deploy behaviour
+
+- **One SSH connection.** A real deploy runs every remote step over one OpenSSH
+  connection (`SURU_SSH_MUX`, `SURU_SSH_CONTROL_PERSIST`), so a deploy stays
+  below the perimeter's own SSH brute-force threshold. `deploy.sh` closes the
+  connection on exit. A dry run opens none.
+- **One Suricata restart.** The Suricata appliers (rules, tuning, drop policy)
+  run without `--restart`. Only when at least one of them changed config does
+  the driver issue one consolidated restart (`suricata-restart.php`); an
+  idempotent re-deploy restarts nothing. Each applier prints a fixed no-change
+  line that the driver matches, so a reworded line errs toward an extra restart,
+  never a stranded config. `SURU_SURICATA_RESTART=false` turns the restart off.
+- **Pre-restart config test (opt-in).** With `SURU_SURICATA_TEST=auto|true`, the
+  deploy runs `suricata -T` over each instance's generated yaml before the
+  restart (`suricata-test-configs.php`). A failing test refuses the deploy with
+  no restart and no revert: the running engines keep their previous config.
+  On an inline deploy the dead-man's switch is re-armed to cover the test.
+- **Rules rebuild.** `SURU_SURICATA_REBUILD=true` forces one deploy to rebuild
+  the Suricata rules and restart, for engines left on a stale ruleset.
+- **WAN-inline guard.** With `SURICATA_IPS_MODE=inline` the deploy refuses a
+  `SURICATA_IFACES` entry equal to `WAN_IFACE` unless `SURU_ALLOW_WAN_INLINE=true`.
+- **Dead-man's switch.** An inline deploy arms a router-side timer that reverts
+  Suricata to legacy if the deploy does not disarm it. The disarm uses a fresh
+  SSH connection, so it only cancels the timer when a new login still reaches
+  the router. The timer does not survive a router reboot.
+- **Privileged commands.** Every root-run command names its binary by full path;
+  the allow-list and the per-account matrix are in
+  [`privilege-matrix-pfsense.md`](./privilege-matrix-pfsense.md).
+- **Secrets in staging.** The staging directory is created mode 700, cleared
+  with sudo at the start of each deploy, and the client key, the backup
+  passphrase file, the GeoIP/ASN secrets file and the AbuseIPDB-bearing importer
+  are removed from it on success. Secret values are charset-checked
+  (`lib/secrets.sh`) before they reach a sed substitution or a secrets file.
+- **Hardware profile.** Values read back from `.hw-profile` are validated
+  (integers, `<integer>mb` memcaps, `low|medium|high`) before they reach a root
+  command. `SURU_HW_PROFILE` and `SURU_TIER1_BACKUP_DIR` relocate the profile and
+  the local backup mirror.
+- **Root CA location.** Every reader resolves the Root CA through `SURU_PKI_DIR`
+  (default `tier4-operations/pki/certs`). With `SURU_PKI_PREISSUED=true` the
+  deploy host needs only `root-ca.pem`: it verifies the pair in `TIER1_CERTS_DIR`
+  (issued by `make gen-certs` on the PKI host) and never signs. Client
+  certificates carry subject and authority key identifiers on every OpenSSL
+  version.
 
 ---
 
@@ -350,13 +397,18 @@ at deploy time.
 ## Revert Procedure
 
 ### Automatic (default)
-If any deploy step fails after the backup completes, the driver's ERR
-trap calls `_pf_revert` / `_opn_revert` which:
+If any deploy step fails after the backup completes, the driver's ERR and EXIT
+traps call `_pf_revert` (pfSense) once; an interrupt (INT/TERM/HUP) after the
+backup reverts the same way, and the deliberate refusals (the inline-flip arm
+failure, the pre-restart config-test refusal) disarm the revert first. The
+OPNsense driver uses `_opn_revert`. The revert:
 1. SCP-pushes the local mirror back to the router if the on-router copy
    was lost.
 2. Decrypts and atomically restores `/conf/config.xml`.
 3. Flushes `/tmp/config.cache`, calls `parse_config(true)`.
-4. Restarts affected services.
+4. Restarts affected services: syslog-ng always, Suricata only when this deploy
+   already restarted it (the appliers run without `--restart`, so otherwise the
+   running engines still hold their pre-deploy config and are left alone).
 
 ### Manual — GUI (easiest)
 Both platforms accept the SURU backup format in their native restore UI:

@@ -119,7 +119,7 @@ Each tier has its own `README.md` and `docs/` with operational detail.
 
 ## Conventions
 
-- **Branches:** `main` (protected) → `develop` → `feature/<name>`, `fix/<name>`, `release/<version>`.
+- **Branches:** `main` (protected) → `feature/<name>`, `fix/<name>`, `release/<version>`.
 - **Commits:** [Conventional Commits](https://www.conventionalcommits.org/) — `feat:`, `fix:`, `chore:`, `docs:`, `refactor:`, `security:`.
 - **Logs:** every source normalised to **ECS v8**.
 - **Detection content:** annotated with MITRE ATT&CK Tactic (`TA####`) + Technique (`T####`).

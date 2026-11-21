@@ -36,6 +36,12 @@
 # revert.log}. The sleeper runs as root (launched via ${SAFETY_SUDO}daemon) so
 # the revert has the privileges sync/restart need.
 
+# sudo binaries (full paths). Every privileged remote command below names its
+# binary through one of these constants, so the sudo allow-list stays exact.
+: "${SAFETY_BIN_DAEMON:=/usr/sbin/daemon}"
+: "${SAFETY_BIN_PKILL:=/bin/pkill}"
+: "${SAFETY_BIN_RM:=/bin/rm}"
+
 _SAFETY_DIR="/tmp/suru-safety"
 _SAFETY_PID="${_SAFETY_DIR}/revert.pid"
 _SAFETY_RUNNER="${_SAFETY_DIR}/revert.sh"
@@ -45,6 +51,23 @@ _SAFETY_RUNNER="${_SAFETY_DIR}/revert.sh"
 # caller's revert command never drifts from _SAFETY_DIR.
 safety_timer_remote_path() {
   echo "${_SAFETY_DIR}/$(basename "$1")"
+}
+
+# Fresh-connection prefix. The driver's options may carry SSH connection
+# reuse (lib/ssh.sh ssh_mux_enable). A disarm must prove that a NEW login still
+# reaches the router: a connection opened before the risky step can outlive a
+# change that refuses new ones, and a disarm over it would cancel the revert
+# with the management path lost. The disarm path sets this, as a local, to
+# `-o ControlMaster=no -o ControlPath=none`; ssh keeps the first value of an
+# option, so the prefix wins over the driver's ControlPath.
+_SAFETY_FRESH_CONN=()
+
+_safety_conn_opts() {
+  SAFETY_CONN_OPTS=()
+  if [[ ${#_SAFETY_FRESH_CONN[@]} -gt 0 ]]; then
+    SAFETY_CONN_OPTS+=("${_SAFETY_FRESH_CONN[@]}")
+  fi
+  SAFETY_CONN_OPTS+=("${SAFETY_SSH_OPTS[@]}")
 }
 
 _safety_ssh() {
@@ -60,7 +83,8 @@ _safety_ssh() {
     echo "[safety-timer] (dry-run) SSH: $*"
     return 0
   fi
-  printf '%s\n' "$*" | ssh "${SAFETY_SSH_OPTS[@]}" "${SAFETY_USER}@${SAFETY_TARGET}" sh -s
+  _safety_conn_opts
+  printf '%s\n' "$*" | ssh "${SAFETY_CONN_OPTS[@]}" "${SAFETY_USER}@${SAFETY_TARGET}" sh -s
 }
 
 _safety_scp() {
@@ -69,7 +93,8 @@ _safety_scp() {
     echo "[safety-timer] (dry-run) SCP: $1 -> ${SAFETY_TARGET}:$2"
     return 0
   fi
-  scp "${SAFETY_SSH_OPTS[@]}" "$1" "${SAFETY_USER}@${SAFETY_TARGET}:$2"
+  _safety_conn_opts
+  scp "${SAFETY_CONN_OPTS[@]}" "$1" "${SAFETY_USER}@${SAFETY_TARGET}:$2"
 }
 
 # safety_timer_arm SECONDS REVERT_SCRIPT_LOCAL REVERT_REMOTE_CMD
@@ -113,7 +138,7 @@ RUNNER
   # Launch the detached sleeper as root. daemon(8) forks, redirects std fds to
   # /dev/null, and writes the child pid to the pidfile. Killing that pid cancels
   # the pending revert.
-  _safety_ssh "${SAFETY_SUDO}daemon -f -p ${_SAFETY_PID} /bin/sh ${_SAFETY_RUNNER}" || {
+  _safety_ssh "${SAFETY_SUDO}${SAFETY_BIN_DAEMON} -f -p ${_SAFETY_PID} /bin/sh ${_SAFETY_RUNNER}" || {
     echo "[safety-timer] ERROR: could not launch revert daemon" >&2; return 1; }
 
   echo "[safety-timer] Armed. Router will auto-revert Suricata to legacy in ${seconds}s unless disarmed."
@@ -130,6 +155,7 @@ safety_timer_disarm() {
 # safety_timer_disarm_quiet — kill the sleeper + remove state, no headline log.
 # Safe to call when nothing is armed (idempotent no-op). Never fails the deploy.
 safety_timer_disarm_quiet() {
+  local -a _SAFETY_FRESH_CONN=(-o "ControlMaster=no" -o "ControlPath=none")
   if [[ "${SAFETY_DRYRUN}" == "true" ]]; then
     echo "[safety-timer] (dry-run) would kill ${_SAFETY_PID} and rm -rf ${_SAFETY_DIR}"
     return 0
@@ -140,7 +166,7 @@ safety_timer_disarm_quiet() {
   # revert after a *successful* deploy). The `-f suru-safety/revert.sh` pattern
   # guards against a recycled PID. Then remove all state (sudo: the pidfile/log
   # are root-owned).
-  if ! _safety_ssh "if [ -f ${_SAFETY_PID} ]; then ${SAFETY_SUDO}pkill -F ${_SAFETY_PID} -f suru-safety/revert.sh 2>/dev/null || true; fi; ${SAFETY_SUDO}rm -rf ${_SAFETY_DIR} 2>/dev/null || true"; then
+  if ! _safety_ssh "if [ -f ${_SAFETY_PID} ]; then ${SAFETY_SUDO}${SAFETY_BIN_PKILL} -F ${_SAFETY_PID} -f suru-safety/revert.sh 2>/dev/null || true; fi; ${SAFETY_SUDO}${SAFETY_BIN_RM} -rf ${_SAFETY_DIR} 2>/dev/null || true"; then
     # The disarm SSH call itself failed to reach the router. The switch is NOT
     # cancelled and will still fire — surface it so a later autonomous revert is
     # diagnosable, but never fail the deploy (contract).

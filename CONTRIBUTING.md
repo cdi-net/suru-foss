@@ -26,9 +26,9 @@ license of this repository).
 ## Workflow
 
 1. **Fork** the repository and clone your fork.
-2. **Branch** from `develop`:
+2. **Branch** from `main`:
    ```bash
-   git switch develop
+   git switch main
    git switch -c feature/<short-name>      # or fix/<short-name>, docs/<short-name>
    ```
 3. **Make your change** following the standards below.
@@ -41,17 +41,15 @@ license of this repository).
    ```
    Prefix with `BREAKING CHANGE:` when you alter an API, schema, or container interface.
    Sign off every commit with `git commit -s` (Developer Certificate of Origin) to certify you may contribute it under the MPL-2.0.
-6. **Open a PR** against `develop` (releases flow `develop` → `main`). Fill in the
-   PR template. Link any related issue.
+6. **Open a PR** against `main`. Fill in the PR template. Link any related issue.
 
 ### Branch strategy
 
 ```text
 main (protected, release state)
-  └── develop (integration)
-        ├── feature/<name>
-        ├── fix/<name>
-        └── release/<version>
+  ├── feature/<name>
+  ├── fix/<name>
+  └── release/<version>
 ```
 
 ### PR requirements (merge gate)
@@ -60,7 +58,7 @@ A PR can merge once:
 
 - [ ] **CI is green** (lint → test → scan — see `.github/workflows/ci.yml`).
 - [ ] **A CODEOWNER has approved** (see `.github/CODEOWNERS`). Branch protection on
-      `main`/`develop` should enable *Require review from Code Owners*.
+      `main` should enable *Require review from Code Owners*.
 - [ ] **Docs updated** for any changed workflow, config, script, or new env var.
 - [ ] **No secrets** in the diff.
 - [ ] Commit messages follow Conventional Commits. Signed commits (`--gpg-sign`)

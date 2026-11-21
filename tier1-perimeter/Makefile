@@ -5,10 +5,11 @@
 #
 # Usage:
 #   make render                       # merge T2 intel into T1 templates
-#   make deploy PLATFORM=pfsense      # push rendered artefacts to device
+#   make deploy PLATFORM=pfsense      # preflight -> render -> push to device
 #   make deploy-full PLATFORM=pfsense # render + deploy in one step
 #   make clean                        # remove rendered/ directory
-#   make test                         # run render pipeline tests
+#   make gen-certs                    # issue the Tier 1 syslog-ng mTLS client pair from the existing Root CA
+#   make test                         # run render pipeline tests and the Tier 1 suites
 #   make api-health                   # probe router REST API
 #   make api-validate                 # validate post-deploy service state via API
 #   make api-install-pfrest           # one-shot: install pfRest on pfSense
@@ -48,6 +49,10 @@ endif
 VERBOSE ?= false
 
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
+# SURU_PKI_DIR: directory holding the SURU Root CA (root-ca.pem, root-ca-key.pem);
+# the one variable every Tier 1 reader of the CA path resolves.
+SURU_PKI_DIR ?= $(REPO_ROOT)/tier4-operations/pki/certs
+export SURU_PKI_DIR
 T2_RENDER  := $(REPO_ROOT)/tier2-telemetry/build/render.sh
 DEPLOY     := $(REPO_ROOT)/tier1-perimeter/scripts/deploy.sh
 TESTS      := $(REPO_ROOT)/tier2-telemetry/build/tests/test-render.sh
@@ -58,7 +63,7 @@ API_LIB   := $(REPO_ROOT)/tier1-perimeter/scripts/lib/api.sh
 SNG_METRICS := $(REPO_ROOT)/tier1-perimeter/scripts/syslog-ng-metrics.sh
 VERIFY_PFB  := $(REPO_ROOT)/tier1-perimeter/scripts/verify-pfblockerng-feeds.sh
 
-.PHONY: render deploy deploy-full preflight clean test \
+.PHONY: render deploy deploy-full gen-certs preflight clean test \
         api-health api-validate api-install-pfrest api-reload-rules api-bootstrap \
         sng-metrics sng-status sng-buffer sng-lag verify-pfblockerng
 
@@ -79,6 +84,14 @@ deploy: preflight render
 deploy-full: deploy
 	@echo "[suru] Deploy-full complete for $(PLATFORM)."
 
+# gen-certs: issue the Tier 1 syslog-ng mTLS client pair from the existing Root
+# CA (idempotent: skips a pair that verifies). Run on the PKI host; it never
+# creates a CA. A deploy host that does not hold the CA key runs with
+# SURU_PKI_PREISSUED=true and TIER1_CERTS_DIR pointing at the pair issued here.
+gen-certs:
+	@echo "[suru] Issuing the Tier 1 client cert (idempotent)"
+	@bash $(REPO_ROOT)/tier1-perimeter/scripts/gen-certs.sh $(if $(filter true,$(DRY_RUN)),--dry-run,) $(if $(filter true,$(VERBOSE)),--verbose,)
+
 clean:
 	@echo "[suru] Removing rendered/ artefacts (preserving .gitkeep)"
 	@find $(REPO_ROOT)/tier1-perimeter/rendered/ -mindepth 1 ! -name .gitkeep -delete 2>/dev/null || true
@@ -86,6 +99,18 @@ clean:
 test:
 	@bash $(TESTS) $(if $(filter true,$(VERBOSE)),--verbose,)
 	@bash $(REPO_ROOT)/tier1-perimeter/scripts/lib/tests/test-exit-trap-cleanup.sh
+	@bash $(REPO_ROOT)/tier1-perimeter/scripts/lib/tests/test-rotation-native-owner.sh
+	@bash $(REPO_ROOT)/tier1-perimeter/scripts/lib/tests/test-secrets.sh
+	@bash $(REPO_ROOT)/tier1-perimeter/scripts/lib/tests/test-ssh.sh
+	@bash $(REPO_ROOT)/tier1-perimeter/scripts/lib/tests/test-safety-timer.sh
+	@bash $(REPO_ROOT)/tier1-perimeter/scripts/lib/tests/test-sudo-allowlist.sh
+	@bash $(REPO_ROOT)/tier1-perimeter/scripts/lib/tests/test-suricata-test-gate.sh
+	@bash $(REPO_ROOT)/tier1-perimeter/pfsense/tests/test-suricata-test-configs.sh
+	@bash $(REPO_ROOT)/tier1-perimeter/pfsense/tests/test-suricata-tuning-apply.sh
+	@bash $(REPO_ROOT)/tier1-perimeter/pfsense/tests/test-suricata-rebuild-rules-flag.sh
+	@bash $(REPO_ROOT)/tier1-perimeter/scripts/lib/tests/test-certs-preissued.sh
+	@bash $(REPO_ROOT)/tier1-perimeter/scripts/lib/tests/test-pki-dir-norepo.sh
+	@bash $(REPO_ROOT)/tier1-perimeter/scripts/tests/test-deploy-rendered-dir.sh
 
 # ---------------------------------------------------------------------------
 # REST API targets — source lib/api.sh and dispatch on ROUTER_PLATFORM
