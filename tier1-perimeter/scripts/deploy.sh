@@ -13,6 +13,11 @@
 # Usage:
 #   deploy.sh --platform pfsense|opnsense [--dry-run] [--verbose]
 #   deploy.sh --platform pfsense --target 192.168.1.1
+#   deploy.sh --platform pfsense --rendered-dir /path/to/rendered/pfsense
+#
+# Options:
+#   --rendered-dir <dir>  read the rendered artefacts from <dir> (absolute path,
+#                         must exist) instead of tier1-perimeter/rendered/<platform>
 #
 # Environment variables:
 #   ROUTER_HOST     — router SSH/API host (required)
@@ -22,6 +27,8 @@
 #   SENSOR_NAME     — sensor label (default: suru-tier1)
 #   WAN_IFACE       — WAN interface (default: igb0)
 #   LAN_IFACE       — LAN interface (default: igb1)
+#   SURU_PKI_PREISSUED / TIER1_CERTS_DIR / SURU_HW_PROFILE / SURU_TIER1_BACKUP_DIR
+#                   — optional overrides (see .env.example)
 #
 # Secrets: never hardcoded. Source from env vars or Vault/SOPS.
 # =============================================================================
@@ -51,6 +58,7 @@ DRY_RUN=false
 VERBOSE=false
 PLATFORM=""
 TARGET="${ROUTER_HOST:-}"
+RENDERED_DIR_ARG=""
 
 # Bash has a single EXIT trap and each install REPLACES the last: lib/api.sh
 # arms `trap _api_cleanup_tmp EXIT` on its FIRST source above, this replaces it,
@@ -59,9 +67,12 @@ TARGET="${ROUTER_HOST:-}"
 # As a bare no-op, this hook silently leaked them on every run through deploy.sh.
 # The driver sources the lib a second time; that arm is guarded, so the
 # re-source cannot reset the trap and discard this chain.
+# Closes the SSH master after the driver's own cleanup ran over it: the driver's
+# EXIT link runs its remote staging cleanup first, then chains this one.
 trap '_deploy_cleanup' EXIT
 _deploy_cleanup() {
   declare -f _api_cleanup_tmp > /dev/null 2>&1 && _api_cleanup_tmp || true
+  declare -f ssh_mux_close > /dev/null 2>&1 && ssh_mux_close || true
 }
 
 _log()  { echo "[deploy] $*"; }
@@ -74,6 +85,9 @@ while [[ $# -gt 0 ]]; do
     --target)   TARGET="$2";   shift 2 ;;
     --dry-run)  DRY_RUN=true;  shift ;;
     --verbose)  VERBOSE=true;  shift ;;
+    --rendered-dir)
+      [[ $# -ge 2 ]] || _die "--rendered-dir requires a directory"
+      RENDERED_DIR_ARG="$2"; shift 2 ;;
     *)          _die "Unknown argument: $1" ;;
   esac
 done
@@ -93,7 +107,13 @@ if [[ -z "${TARGET}" ]]; then
   TARGET="dryrun-host.invalid"
 fi
 
-RENDERED_DIR="${REPO_ROOT}/tier1-perimeter/rendered/${PLATFORM}"
+if [[ -n "${RENDERED_DIR_ARG}" ]]; then
+  [[ "${RENDERED_DIR_ARG}" == /* ]] || _die "--rendered-dir must be an absolute path: ${RENDERED_DIR_ARG}"
+  [[ -d "${RENDERED_DIR_ARG}" ]] || _die "--rendered-dir is not a directory: ${RENDERED_DIR_ARG}"
+  RENDERED_DIR="${RENDERED_DIR_ARG}"
+else
+  RENDERED_DIR="${REPO_ROOT}/tier1-perimeter/rendered/${PLATFORM}"
+fi
 if [[ ! -d "${RENDERED_DIR}" ]]; then
   if [[ "${DRY_RUN}" == "true" ]]; then
     _log "Rendered artefacts not found at ${RENDERED_DIR} — dry-run skipping deploy step. (Run 'make render' to materialise files.)"
@@ -113,6 +133,12 @@ DRIVER="${PLATFORMS_DIR}/${PLATFORM}.sh"
 _log "Platform: ${PLATFORM}  Target: ${TARGET}  DryRun: ${DRY_RUN}"
 
 export REPO_ROOT TIER1_DIR DRY_RUN VERBOSE
+
+# One SSH connection for the whole deploy (lib/ssh.sh ssh_mux_enable): the
+# drivers append SSH_MUX_OPTS to their ssh/scp options.
+if [[ "${DRY_RUN}" != "true" ]]; then
+  ssh_mux_enable
+fi
 
 # Source the platform driver and execute deploy
 # shellcheck source=platforms/pfsense.sh

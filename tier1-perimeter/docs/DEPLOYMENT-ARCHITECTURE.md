@@ -397,6 +397,11 @@ On the success path the EXIT trap is **not** disarmed. It stays armed with
 `_PF_TRAP_STAGING_KEEP=true`: the staging directory is deliberately left on
 the router, while the chained temp-file cleanup still runs.
 
+The chain head, `_deploy_cleanup` in `deploy.sh`, also closes the shared SSH
+connection (`ssh_mux_close`) after the driver's own cleanup ran over it, and the
+driver's EXIT link calls `_pf_revert_once` when the exit is non-zero while the
+revert is armed (the revert fires at most once, from the main shell only).
+
 `scripts/lib/tests/test-exit-trap-cleanup.sh` guards all of the above,
 executing the shipped trap body at global scope with `ssh` stubbed.
 

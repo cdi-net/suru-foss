@@ -26,10 +26,13 @@ tier1-perimeter/
 │   └── opnsense/                     # Populated by `make render PLATFORM=opnsense`
 ├── scripts/
 │   ├── deploy.sh                     # Deployment orchestrator
+│   ├── gen-certs.sh                  # Issue the syslog-ng mTLS client pair from the Root CA
+│   ├── lib/                          # ssh (connection reuse), certs, safety timer, hw-preflight, secrets, api
 │   └── platforms/
 │       ├── pfsense.sh                # pfSense platform driver
 │       └── opnsense.sh               # OPNsense platform driver
-└── Makefile                          # render / deploy / deploy-full / clean / test
+├── docs/                             # Deployment notes, architecture, prerequisites, privilege matrix
+└── Makefile                          # render / deploy / deploy-full / gen-certs / clean / test
 ```
 
 ## Operator Workflow
@@ -48,7 +51,20 @@ make deploy-full PLATFORM=pfsense
 
 # Dry run (no changes to device)
 make deploy-full PLATFORM=pfsense DRY_RUN=true
+
+# Deploy artefacts rendered elsewhere (absolute path, must exist)
+tier1-perimeter/scripts/deploy.sh --platform pfsense --rendered-dir /path/to/rendered/pfsense
+
+# On the PKI host: issue the syslog-ng mTLS client pair from the existing Root CA
+make gen-certs
 ```
+
+A deploy host that does not hold the Root CA key sets `SURU_PKI_PREISSUED=true`
+and `TIER1_CERTS_DIR=<dir with the pair issued by make gen-certs>`; the driver
+then verifies the pair against the public Root CA and never signs.
+`SURU_PKI_DIR` points every reader at a Root CA directory other than
+`tier4-operations/pki/certs`. See [`.env.example`](./.env.example) and
+[`docs/DEPLOYMENT-NOTES.md`](./docs/DEPLOYMENT-NOTES.md).
 
 ## Required Environment Variables
 

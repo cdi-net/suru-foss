@@ -52,8 +52,11 @@ Click **Save**.
 > **Security note:** `NOPASSWD ALL` for the `admins` group is Netgate's own
 > documented example for automation use cases. The deploy user's SSH access
 > is already restricted to key-only authentication, which limits the attack
-> surface. If a narrower command set is preferred, see the Netgate sudo
-> documentation for per-command restrictions.
+> surface. If a narrower command set is preferred, the pfSense driver names
+> every root-run binary by full path: replace `ALL` with the 14-path allow-list
+> in [the pfSense privilege matrix](./privilege-matrix-pfsense.md) section 2a, and
+> set `SURU_SKIP_API_INSTALL=true` (pfREST installation needs `pkg-static`,
+> which is not on that list).
 
 ---
 

@@ -18,6 +18,24 @@ All drivers implement the same five hooks:
 | `pfsense.sh` | pfSense CE / Plus | ✅ Production | SSH + `pfSsh.php playback svc` | pfRest (<https://pfrest.org/>) — installed as first package |
 | `opnsense.sh` | OPNsense 21+ | 🚧 Scaffold | SSH + `pluginctl` / `confctl` | Native API (<https://docs.opnsense.org/development/api.html>) |
 
+## Privilege matrix
+
+The pfSense deploy account's sudo command list (full-path constants in the
+driver, checked by `scripts/lib/tests/test-sudo-allowlist.sh`) and the API
+account are documented in
+[`../../docs/privilege-matrix-pfsense.md`](../../docs/privilege-matrix-pfsense.md).
+A driver change that adds a root-run binary updates the matrix in the same
+change. The OPNsense scaffold has no matrix yet.
+
+## SSH connection reuse
+
+`deploy.sh` calls `ssh_mux_enable` (`../lib/ssh.sh`) for a real deploy, and the
+drivers append `SSH_MUX_OPTS` to their ssh/scp options, so every remote step of
+a deploy shares one OpenSSH connection. `deploy.sh` closes it on exit
+(`ssh_mux_close`, the last link of the EXIT-trap chain). The safety timer's
+disarm path forces a fresh connection, so it proves a new login still reaches
+the router. `SURU_SSH_MUX=false` turns reuse off.
+
 ## REST API Layer
 
 All drivers source `../lib/api.sh` for post-deploy validation, incremental

@@ -10,6 +10,7 @@
  *   sudo php /tmp/suru-staging/suricata-tuning-apply.php \
  *       --profile=low|medium|high \
  *       [--stream-memcap=Xmb] [--reassembly-memcap=Xmb] [--defrag-memcap=Xmb] \
+ *       [--app-layer-parsers=bittorrent-dht] \
  *       [--ifaces=igb1,igb2] [--restart]
  *
  * --ifaces takes PHYSICAL NIC names (physical-only contract); each resolves
@@ -22,6 +23,27 @@
  *   stream_memcap       — bytes integer (pfSense default: 268435456 = 256 MB)
  *   reassembly_memcap   — bytes integer (pfSense default: 131217728 = ~125 MB)
  *   frag_memcap         — bytes integer (pfSense default: 33554432 = 32 MB)
+ *
+ * --app-layer-parsers turns on the named app-layer parsers on every scoped
+ * interface. A signature on a protocol whose parser is off fails to load
+ * ("protocol ... cannot be used in a signature"): the engine skips it and its
+ * detection is absent. Allowed names and their XML keys (suru_parser_keys()):
+ *   bittorrent-dht      — bittorrent_parser, yes|no. XML key confirmed
+ *                         2026-10-18 from the router's installed Suricata
+ *                         package (Suricata 7.0.11):
+ *                           suricata_generate_yaml.php:999-1002
+ *                             if (!empty($suricatacfg['bittorrent_parser']))
+ *                               $bittorrent_parser = $suricatacfg['bittorrent_parser'];
+ *                             else $bittorrent_parser = "no";
+ *                           suricata_yaml_template.inc:344-345
+ *                             bittorrent-dht:
+ *                               enabled: {$bittorrent_parser}
+ *                         suricata_migrate_config.php:559-560 sets "yes" only
+ *                         during a package config migration; on a router whose
+ *                         config.xml has no bittorrent_parser key every
+ *                         instance yaml carries "enabled: no". ET Open's sid
+ *                         2066251 (PeerBlight CnC, emerging-malware) needs the
+ *                         parser on.
  *
  * Restart function confirmed 2026-07-01 from live router:
  *   grep -n 'function suricata_' /usr/local/pkg/suricata/suricata.inc
@@ -64,6 +86,14 @@ function suru_parse_memcap_bytes(string $val): ?int {
 }
 
 // ---------------------------------------------------------------------------
+// Allowed app-layer parser names -> their per-interface XML key in
+// installedpackages/suricata/rule[]. An unlisted name is a usage error.
+// ---------------------------------------------------------------------------
+function suru_parser_keys(): array {
+    return ['bittorrent-dht' => 'bittorrent_parser'];
+}
+
+// ---------------------------------------------------------------------------
 // Argument parsing
 // ---------------------------------------------------------------------------
 $profile          = 'medium';   // detect_eng_profile default
@@ -71,6 +101,7 @@ $stream_memcap    = null;        // null = do not touch (keep pfSense default)
 $reassembly_memcap = null;
 $defrag_memcap    = null;
 $ifaces           = [];
+$parsers          = [];          // app-layer parser name => XML key, to turn on
 $do_restart       = false;
 
 foreach (array_slice($argv, 1) as $arg) {
@@ -94,6 +125,16 @@ foreach (array_slice($argv, 1) as $arg) {
             fwrite(STDERR, "[suricata-tuning-apply] ERROR: invalid --defrag-memcap value: {$m[1]}\n");
             exit(1);
         }
+    } elseif (preg_match('/^--app-layer-parsers=([a-z0-9,-]+)$/', $arg, $m)) {
+        $known = suru_parser_keys();
+        foreach (array_filter(array_map('trim', explode(',', $m[1]))) as $p) {
+            if (!isset($known[$p])) {
+                fwrite(STDERR, "[suricata-tuning-apply] ERROR: unknown --app-layer-parsers name: {$p} (allowed: " .
+                    implode(',', array_keys($known)) . ")\n");
+                exit(1);
+            }
+            $parsers[$p] = $known[$p];
+        }
     } elseif (preg_match('/^--ifaces=([A-Za-z0-9,._-]+)$/', $arg, $m)) {
         $ifaces = array_filter(array_map('trim', explode(',', $m[1])));
     } elseif ($arg === '--restart') {
@@ -113,6 +154,9 @@ if ($reassembly_memcap !== null) {
 }
 if ($defrag_memcap !== null) {
     echo "[suricata-tuning-apply] frag_memcap target: {$defrag_memcap} bytes" . PHP_EOL;
+}
+if (!empty($parsers)) {
+    echo "[suricata-tuning-apply] app-layer parsers on: " . implode(',', array_keys($parsers)) . PHP_EOL;
 }
 
 // ---------------------------------------------------------------------------
@@ -188,10 +232,22 @@ foreach ($rules as $idx => $rule) {
             $changed++;
         }
     }
+
+    // App-layer parsers. The package generates an absent key as "no".
+    foreach ($parsers as $name => $key) {
+        $cur = (string)($rule[$key] ?? '');
+        if ($cur !== 'yes') {
+            config_set_path("installedpackages/suricata/rule/{$idx}/{$key}", 'yes');
+            $shown = ($cur === '') ? 'unset' : $cur;
+            echo "[suricata-tuning-apply] iface={$iface}: {$key} ({$name}) {$shown} -> yes" . PHP_EOL;
+            $changed++;
+        }
+    }
 }
 
 if ($changed > 0) {
-    write_config('SURU: set Suricata tuning (profile=' . $profile . ') on ' . $changed . ' value(s)');
+    $desc_parsers = empty($parsers) ? '' : '; parsers=' . implode(',', array_keys($parsers));
+    write_config('SURU: set Suricata tuning (profile=' . $profile . $desc_parsers . ') on ' . $changed . ' value(s)');
     echo "[suricata-tuning-apply] config.xml updated: {$changed} value(s)." . PHP_EOL;
 
     if ($pkg_available && function_exists('sync_suricata_package_config')) {

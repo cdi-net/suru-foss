@@ -26,6 +26,10 @@
  *                       min(NIC netmap queues, ncpu/2), never 'auto' (FreeBSD
  *                       threading quirk — size explicitly to the NIC's rings).
  *   --restart           Restart all Suricata interfaces after applying changes.
+ *   --rebuild           Sync with the package rules rebuild even when the rule
+ *                       selection is already at target (no no-change sentinel, so
+ *                       the driver's consolidated restart follows). One-shot repair
+ *                       for engines left on a stale rules/suricata.rules.
  *
  * For each interface under installedpackages/suricata/rule[]:
  *   1. Parse the current rulesets list (||-joined category filenames).
@@ -58,13 +62,14 @@ require_once('config.lib.inc');
 require_once('/usr/local/pkg/suricata/suricata.inc');
 
 if ($argc < 3) {
-  fwrite(STDERR, "usage: php suricata-rules-apply.php <enable.conf> <disable.conf> [--ifaces=...] [--restart]\n");
+  fwrite(STDERR, "usage: php suricata-rules-apply.php <enable.conf> <disable.conf> [--ifaces=...] [--ips-mode=legacy|inline] [--rebuild] [--restart]\n");
   exit(2);
 }
 
 $enable_path  = $argv[1];
 $disable_path = $argv[2];
 $do_restart   = false;
+$force_rebuild = false;   // --rebuild: sync + rules rebuild even with no selection change
 $desired_physical = [];
 $ips_mode_arg   = 'legacy';
 $netmap_threads_arg = 0;   // 0 = compute from NIC queues + ncpu
@@ -72,6 +77,8 @@ $netmap_threads_arg = 0;   // 0 = compute from NIC queues + ncpu
 foreach (array_slice($argv, 3) as $arg) {
   if ($arg === '--restart') {
     $do_restart = true;
+  } elseif ($arg === '--rebuild') {
+    $force_rebuild = true;
   } elseif (preg_match('/^--ifaces=(.+)$/', $arg, $m)) {
     $desired_physical = array_values(array_filter(array_map('trim', explode(',', $m[1]))));
   } elseif (preg_match('/^--ips-mode=(legacy|inline)$/', $arg, $m)) {
@@ -268,6 +275,46 @@ if (count($enable_set) === 0 && count($disable_set) === 0) {
 echo "[suricata-rules-apply] Parsed " . count($enable_set) . " enabled groups, "
    . count($disable_set) . " disabled groups." . PHP_EOL;
 
+// ------------------------------------------------------------------
+// Dead-group guard. A `group:` whose <name>.rules exists neither in
+// the downloaded rule tree nor in the ET Open tarball's ruleslist can never
+// load a rule, yet the package silently keeps the name in `rulesets` (the
+// baseline carried `emerging-trojan` for months after ET renamed it MALWARE).
+// WARN only, and only for the ENABLE set — a dead name in disable.conf is a
+// removal tombstone (it drops a stale `rulesets` entry) and is expected. A
+// category that appears in a later ET release must not fail the deploy, and
+// both sets are applied unchanged.
+// ------------------------------------------------------------------
+$known_rule_files = [];
+$rules_dir = '/usr/local/share/suricata/rules';
+if (is_dir($rules_dir)) {
+  foreach ((array) scandir($rules_dir) as $entry) {
+    if (is_string($entry) && substr($entry, -6) === '.rules') $known_rule_files[$entry] = true;
+  }
+}
+$ruleslist = '/usr/local/etc/suricata/emerging.rules.tar.gz.ruleslist';
+if (is_readable($ruleslist)) {
+  $listed = @unserialize((string) file_get_contents($ruleslist), ['allowed_classes' => false]);
+  if (is_array($listed)) {
+    foreach ($listed as $entry) {
+      if (!is_string($entry)) continue;
+      // The package extracts every ET file with an emerging- prefix
+      // (botcc.rules -> emerging-botcc.rules); accept both spellings.
+      $known_rule_files[$entry] = true;
+      if (strpos($entry, 'emerging-') !== 0) $known_rule_files['emerging-' . $entry] = true;
+    }
+  }
+}
+if (count($known_rule_files) > 0) {
+  foreach ($enable_set as $f => $_) {
+    if (!isset($known_rule_files[$f])) {
+      echo "[suricata-rules-apply] WARN: enable.conf group {$f} matches no rule file in {$rules_dir} or the ET ruleslist — dead group, loads nothing" . PHP_EOL;
+    }
+  }
+} else {
+  echo "[suricata-rules-apply] WARN: no rule inventory readable ({$rules_dir}, {$ruleslist}) — dead-group check skipped" . PHP_EOL;
+}
+
 $interfaces = config_get_path('installedpackages/suricata/rule', []);
 
 // ------------------------------------------------------------------
@@ -450,6 +497,16 @@ if ($dirty) {
   echo "[suricata-rules-apply] No interfaces required rule-selection changes." . PHP_EOL;
 }
 
+// --rebuild: the selection may already be at target in config.xml while the
+// engines still load an older rules/suricata.rules (a deploy that ran before
+// this applier forced $rebuild_rules). Treat it as a change: sync with
+// the rebuild below and leave the no-change sentinel unprinted so the driver's
+// consolidated restart follows.
+if (!$needs_sync && $force_rebuild) {
+  $needs_sync = true;
+  echo "[suricata-rules-apply] --rebuild given with no rule-selection change: forcing the rules rebuild, sync and restart." . PHP_EOL;
+}
+
 if (!$needs_sync) {
   echo "[suricata-rules-apply] Nothing changed — skipping sync/restart. Done." . PHP_EOL;
   exit(0);
@@ -458,8 +515,22 @@ if (!$needs_sync) {
 // sync_suricata_package_config() walks installedpackages/suricata/rule and
 // regenerates each per-interface suricata_<UUID>_<iface>/suricata.yaml.
 // Must run for registration/ips_mode changes too, not only rule-selection.
-echo "[suricata-rules-apply] Calling sync_suricata_package_config() to regenerate per-interface yamls..." . PHP_EOL;
+//
+// The yaml is only half of it: the enforcing rules/suricata.rules each instance
+// loads is rebuilt by suricata_prepare_rule_files() (called from
+// suricata_generate_yaml.php), and that function returns at once unless the
+// package global $rebuild_rules is TRUE ("if there is no reason to rebuild the
+// rules, exit to save time", suricata.inc). The GUI pages and the rule-update
+// cron set it; a plain sync from here does not. Without it a category change
+// lands in config.xml and the yaml but the engine keeps loading the previous
+// ruleset until the nightly rule update or a reboot rebuilds it — observed live:
+// new categories and removed engine-event files written to rulesets, a clean
+// restart, and the previous rule set still loaded.
+// Same idiom as suricata-drop-policy-apply.php.
+$GLOBALS['rebuild_rules'] = true;
+echo "[suricata-rules-apply] Calling sync_suricata_package_config() to regenerate per-interface yamls and rebuild the enforcing rules (rebuild_rules=true)..." . PHP_EOL;
 sync_suricata_package_config();
+$GLOBALS['rebuild_rules'] = false;
 
 // ------------------------------------------------------------------
 // Inline-mode HOME_NET coverage check (WARN, non-blocking).
@@ -474,7 +545,7 @@ if ($ips_mode_xml === 'ips_mode_inline' && count($carrier_map) > 0) {
   // suricata_defs.inc:73 (`define('SURICATADIR', SURICATA_PBI_BASEDIR .
   // 'etc/suricata/')`), used by sync_suricata_package_config() at
   // suricata.inc:899.
-  // Defensive fallback to the confirmed literal path (docs/architecture.md:296)
+  // Defensive fallback to the confirmed literal path
   // so an undefined constant degrades to the WARN path, never a fatal that
   // would skip --restart mid-deploy.
   $suricata_dir = defined('SURICATADIR') ? SURICATADIR : '/usr/local/etc/suricata/';

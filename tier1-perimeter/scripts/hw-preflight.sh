@@ -51,7 +51,7 @@ if [[ "${SURU_SKIP_HW_PREFLIGHT:-false}" == "true" ]]; then
   exit 0
 fi
 
-# Auto dry-run if no target host (mirrors deploy.sh:76-83 guard)
+# Auto dry-run if no target host (mirrors the runtime dry-run auto-detection guard in deploy.sh)
 if [[ -z "${TARGET}" ]]; then
   if [[ "${DRY_RUN}" != "true" ]]; then
     _log "No ROUTER_HOST/--target set; activating dry-run automatically."
