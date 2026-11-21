@@ -106,7 +106,12 @@ pfBlockerNG):
   Log-stream filter only: detection scripts run on the live event stream
   and still fire on mDNS-borne attacks.
 
-The applier is pfSense-specific; OPNsense support is not yet implemented.
+On pfSense the stage runs `pfsense/unbound-localzones-apply.php`. On OPNsense it runs
+`opnsense/unbound-localzones-apply.php`, which owns one drop-in file
+(`/usr/local/etc/unbound.opnsense.d/suru-localzones.conf`) for the special-use zones and
+rolls its own write back on failure. The system-domain static setting is reported, not
+written, on OPNsense (its Unbound model path is not converged by the applier); the
+deploy continues with a warning. The same two gates apply on both platforms.
 
 ## Invariant 11
 
