@@ -159,6 +159,7 @@ Override per-invocation with `PLATFORM=opnsense make deploy`.
 | `make api-install-pfrest` | One-shot: install pfRest on pfSense as first package |
 | `make api-bootstrap` | One-shot: create `suru-validator` user + issue API key (pfSense, SSH-based, idempotent — rotates the key on re-run) |
 | `make api-reload-rules` | Incremental Suricata rules reload without service restart |
+| `make sng-metrics` / `sng-status` / `sng-buffer` / `sng-lag` | syslog-ng telemetry over SSH: service state, per-file disk-buffer inventory, delivery lag (needs a root shell on the router) |
 
 ### Variable overrides
 
@@ -309,6 +310,98 @@ sudo dqtool info /var/db/syslog-ng-00000.rqf
 Shows number of messages queued, queue file size, and reliable (`.rqf`) mode
 confirmation. A growing queue means the SIEM is not consuming; a draining queue
 means delivery is caught up.
+
+### Workstation check: per-file buffer report
+
+```bash
+make -C tier1-perimeter sng-buffer                      # human report
+make -C tier1-perimeter sng-buffer ORPHAN_AGE_HOURS=48  # change the orphan threshold (default 24)
+bash tier1-perimeter/scripts/syslog-ng-metrics.sh --buffer --json
+```
+
+The tool needs a root shell on the router over the deploy identity
+(`sudo sh`); a restricted deploy account does not allow it. The `sng-*`
+targets reach the router through `scripts/lib/ssh.sh`, so the lib's SSH
+contract applies: `SSH_STRICT_HOST_KEY_CHECKING` takes `yes`, `accept-new` or
+`no` and defaults to `yes` (`.env.example`); a router not yet in `known_hosts`
+needs `accept-new` once.
+
+The `DISK BUFFER` section prints one row per file matched by
+`/var/db/syslog-ng-*.rqf` and `/var/db/syslog-ng-*.qf`:
+
+| Token | Meaning |
+|---|---|
+| `Capacity (ceiling)` | Configured ceiling and where it was read: `/usr/local/etc/syslog-ng.conf capacity-bytes`, else `/usr/local/etc/suru/hw-profile.conf`, else `unknown — <reason>` |
+| `✓` row | Live file (newest mtime): path, messages, size (and percent of ceiling when known), last write age |
+| `⚠ ORPHAN?` row | Not the live file, not held open by syslog-ng (`held open: no`, or `unknown` when the open-file read failed), non-zero messages, and no write for longer than the threshold (`ORPHAN_AGE_HOURS`, default 24) |
+| `-` row | Not the live file and not flagged as an orphan: syslog-ng holds it open, its last write is within the threshold, it holds 0 messages, or its age could not be read |
+| `✗` row / `✗ <text>` line | A file or collection read failed; the text is the captured error. The row shows `✗` even when it is the live file or would otherwise be an orphan, and its count reads `messages unknown` |
+| `held open: yes\|no\|unknown` | Whether the syslog-ng process has the file open (from `procstat -f`); `unknown` when that read could not be made |
+| `Queue depth (live)` | `d_siem_tls` queued bytes and the live file's message count; `(messages unknown)` when the live file's count could not be read, `(no buffer file)` when no file exists |
+
+`--json` emits one object. Under `buffer`: `messages_queued` and
+`queue_file*` describe the live file only; `queue_ceiling_bytes` is `null`
+when no ceiling could be read, with `queue_ceiling_source` set to
+`syslog-ng.conf`, `hw-profile.conf` or `unknown`; `orphan_count` and
+`orphan_age_threshold_seconds` summarise the orphan check; `files[]` lists
+every file newest first (`path`, `type`, `messages`, `size_bytes`, `mtime`,
+`age_seconds`, `held_open`, `live`, `orphan`, `error`); `collection_errors[]`
+is empty when every read succeeded. A failed read is listed there, never
+shown as zero: with no buffer file `files[]` is empty and `queue_file` is
+`null`, and when the live file's count could not be read its
+`files[].messages` is `null` and `collection_errors[]` carries
+`live buffer message count unavailable`. `buffer.messages_queued` and
+`lag.queued_messages` stay numeric and read `0` in those two cases, so check
+those fields before trusting a `0`.
+
+### Orphaned buffer files
+
+An orphan has an older mtime, a non-zero `number_of_messages` and
+`held open: no`, while the newest file is written continuously. A running
+syslog-ng may not replay buffer files it does not hold open; if so, their
+messages stay undelivered. Treat any non-live file with messages as a
+candidate orphan, not as a known cause.
+
+Cleanup is an operator action:
+
+1. Run `make -C tier1-perimeter sng-buffer` and note the `ORPHAN?` rows.
+2. Confirm the row shows `held open: no`. A row showing `held open: unknown`
+   is still flagged: confirm on the router with
+   `sudo procstat -f $(pgrep -x syslog-ng)` that the file is not open.
+3. Decide delete vs replay; review the messages first, since a replay
+   re-delivers them to the SIEM.
+4. Delete only the unheld files, one by one, from `/var/db` on the router.
+5. Re-run `make -C tier1-perimeter sng-buffer` and confirm only the live file
+   remains and `Queue depth (live)` is unchanged.
+
+### Workstation check: delivery lag
+
+```bash
+make -C tier1-perimeter sng-lag
+```
+
+The `DELIVERY LAG` section takes `Queued in buffer` from the live file's
+`dqtool` count and the bytes in brackets from the `d_siem_tls#0` queued
+counter of `syslog-ng-ctl stats`. When the count is known it prints
+`<N> messages` and a write rate, plus a drain estimate when messages are
+queued. When it is not known the line reads `unknown (<bytes>) ⚠` (buffer
+files exist, live count unreadable) or `none — no buffer file found under
+/var/db (<bytes>) ⚠`, `Drain` reads `buffer depth unknown — drain estimate
+skipped`, and the collection errors print as `✗` lines.
+
+### Router-side commands
+
+```bash
+# Enumerate buffer files
+ls -l /var/db/syslog-ng-*.rqf /var/db/syslog-ng-*.qf
+
+# Message count per file
+for f in /var/db/syslog-ng-*.rqf; do echo "$f"; sudo dqtool info "$f"; done
+
+# Configured capacity: rendered conf and hw profile
+grep -o 'capacity-bytes([0-9]*)' /usr/local/etc/syslog-ng.conf
+grep SYSLOGNG_DISK_BUFFER /usr/local/etc/suru/hw-profile.conf
+```
 
 ### Check whether the SIEM destination host is reachable
 
